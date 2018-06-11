@@ -113,10 +113,13 @@ where
 
     #[cfg_attr(feature = "cargo-clippy", allow(needless_pass_by_value))]
     pub fn queue_packet(&mut self) -> QuicResult<()> {
+
         let (dst_cid, src_cid) = (self.remote.cid, self.local.cid);
         debug_assert_eq!(src_cid.len, GENERATED_CID_LENGTH);
         let number = self.src_pn;
         self.src_pn += 1;
+
+        println!("debug : queue packet, src_pn = {}", self.src_pn);
 
         let (ptype, new_state) = match self.state {
             State::Connected => (None, self.state),
@@ -202,7 +205,10 @@ where
     }
 
     pub(crate) fn handle(&mut self, buf: &mut [u8]) -> QuicResult<()> {
-        self.handle_partial(PartialDecode::new(buf)?)
+        println!("debug : handle {:?}", buf);
+        let pdecode = PartialDecode::new(buf)?;
+        println!("debug : partial decoded");
+        self.handle_partial(pdecode)
     }
 
     pub(crate) fn handle_partial(&mut self, partial: PartialDecode) -> QuicResult<()> {
@@ -246,6 +252,7 @@ where
 
     #[cfg_attr(feature = "cargo-clippy", allow(needless_pass_by_value))]
     fn handle_packet(&mut self, header: Header, payload: Vec<Frame>) -> QuicResult<()> {
+        println!("debug : handle packet {:?}", payload);
         let (dst_cid, number) = match header {
             Header::Long {
                 dst_cid,
@@ -285,11 +292,11 @@ where
 
         let mut send_ack = false;
         for frame in &payload {
+            println!("debug : frame {:?}", frame);
             match frame {
                 Frame::Crypto(f) => {
-                    debug!("crypto frame:");
-                    debug!("  {:?}", f);
-                    send_ack = true;
+                    println!("debug : crypto frame:");
+                    println!("debug :   {:?}", f);
                     self.handle_handshake_message(&f.payload);
                 }
                 Frame::Stream(f) => {
@@ -327,8 +334,8 @@ where
 
     fn handle_handshake_message(&mut self, msg : &[u8]) -> QuicResult<()> {
 
-        debug!("handle handshake message:");
-        debug!("  length = {}", msg.len());
+        println!("debug : handle handshake message:");
+        println!("debug :   length = {}", msg.len());
 
         let (new_msg, new_secret) = self.handshake.process_handshake_message(msg)?;
 
@@ -378,9 +385,9 @@ where
         // send new message
 
         if let Some(msg) = new_msg {
+            println!("debug : send handshake message: {:?}", msg);
             self.control.push_back(Frame::Crypto(CryptoFrame {
-                offset  : 0,
-                len     : Some(msg.len() as u64),
+                len     : msg.len() as u16,
                 payload : msg,
             }));
         }
@@ -391,8 +398,13 @@ where
 
 impl ConnectionState<handshake::ClientSession> {
     pub(crate) fn initial(&mut self) -> QuicResult<()> {
-        // TODO
-        self.handshake.create_handshake_request();
+        println!("debug : create initial handshake packet");
+        let msg = self.handshake.create_handshake_request()?;
+        debug_assert!(msg.len() < (1 << 16));
+        self.control.push_back(Frame::Crypto(CryptoFrame{
+            len     : msg.len() as u16,
+            payload : msg,
+        }));
         Ok(())
     }
 }
@@ -421,104 +433,3 @@ enum State {
 }
 
 const IPV6_MIN_MTU: usize = 1232;
-
-#[cfg(test)]
-pub mod tests {
-    use super::{tls, ConnectionState, PartialDecode, Secret};
-    use super::{ClientTransportParameters, ConnectionId, ServerTransportParameters};
-    use std::sync::Arc;
-
-    #[test]
-    fn test_encoded_handshake() {
-        let mut c = client_conn_state();
-        c.initial().unwrap();
-        let mut cp = c.queued().unwrap().unwrap().clone();
-        c.pop_queue();
-
-        let mut s = server_conn_state(PartialDecode::new(&mut cp).unwrap().dst_cid());
-        s.handle(&mut cp).unwrap();
-        let mut messages = Vec::new();
-        gather(&mut s, &mut messages);
-
-        let mut rt = 10;
-        loop {
-            for mut sp in messages.drain(..) {
-                c.handle(&mut sp).unwrap();
-            }
-
-            gather(&mut c, &mut messages);
-
-            for mut cp in messages.drain(..) {
-                s.handle(&mut cp).unwrap();
-            }
-
-            gather(&mut s, &mut messages);
-
-            let header = PartialDecode::new(messages.last_mut().unwrap())
-                .unwrap()
-                .header;
-            if header.ptype().is_none() {
-                break;
-            }
-
-            rt -= 1;
-            if rt < 1 {
-                panic!("short header not emitted within 10 round trips");
-            }
-        }
-    }
-
-    fn gather<T>(cs: &mut ConnectionState<T>, buf: &mut Vec<Vec<u8>>)
-    where
-        T: tls::Session + tls::QuicSide,
-    {
-        loop {
-            let mut found = false;
-            if let Some(packet) = cs.queued().unwrap() {
-                buf.push(packet.clone());
-                found = true;
-            }
-            if found {
-                cs.pop_queue();
-            } else {
-                break;
-            }
-        }
-    }
-
-    #[test]
-    fn test_handshake() {
-        let mut c = client_conn_state();
-        c.initial().unwrap();
-        let mut initial = c.queued().unwrap().unwrap().clone();
-        c.pop_queue();
-
-        let mut s = server_conn_state(PartialDecode::new(&mut initial).unwrap().dst_cid());
-        s.handle(&mut initial).unwrap();
-        let mut server_hello = s.queued().unwrap().unwrap().clone();
-
-        c.handle(&mut server_hello).unwrap();
-        assert!(c.queued().unwrap().is_some());
-    }
-
-    pub fn server_conn_state(hs_cid: ConnectionId) -> ConnectionState<tls::ServerSession> {
-        ConnectionState::new(
-            tls::server_session(
-                &Arc::new(tls::tests::server_config()),
-                &ServerTransportParameters::default(),
-            ),
-            Some(Secret::Handshake(hs_cid)),
-        )
-    }
-
-    pub fn client_conn_state() -> ConnectionState<tls::ClientSession> {
-        ConnectionState::new(
-            tls::client_session(
-                Some(tls::tests::client_config()),
-                "Localhost",
-                &ClientTransportParameters::default(),
-            ).unwrap(),
-            None,
-        )
-    }
-}

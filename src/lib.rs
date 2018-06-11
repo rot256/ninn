@@ -23,6 +23,7 @@ mod conn_state;
 mod crypto;
 mod frame;
 mod nquic;
+mod noise;
 pub mod http;
 mod packet;
 mod parameters;

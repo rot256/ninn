@@ -26,6 +26,7 @@ impl BufLen for Frame {
     fn buf_len(&self) -> usize {
         match self {
             Frame::Ack(f) => f.buf_len(),
+            Frame::Crypto(f) => 1 + f.buf_len(),
             Frame::ApplicationClose(f) => 1 + f.buf_len(),
             Frame::ConnectionClose(f) => 1 + f.buf_len(),
             Frame::Padding(f) => f.buf_len(),
@@ -33,7 +34,6 @@ impl BufLen for Frame {
             Frame::PathResponse(f) => 1 + f.buf_len(),
             Frame::Ping => 1,
             Frame::Stream(f) => f.buf_len(),
-            Frame::Crypto(f) => f.buf_len(),
             Frame::StreamIdBlocked(f) => 1 + f.buf_len(),
         }
     }
@@ -91,6 +91,11 @@ impl Codec for Frame {
             0x0a => Frame::StreamIdBlocked({
                 buf.get_u8();
                 StreamIdBlockedFrame::decode(buf)?
+            }),
+            CRYPTO_FRAME_ID => Frame::Crypto({
+                println!("debug : decoding crypto frame");
+                buf.get_u8();
+                CryptoFrame::decode(buf)?
             }),
             0x0d => Frame::Ack(AckFrame::decode(buf)?),
             0x0e => Frame::PathChallenge({
@@ -176,55 +181,27 @@ impl Codec for StreamFrame {
 
 #[derive(Debug, PartialEq)]
 pub struct CryptoFrame {
-    pub offset: u64,
-    pub len: Option<u64>,
-    pub payload: Vec<u8>,
+    pub len     : u16,
+    pub payload : Vec<u8>,
 }
 
 impl BufLen for CryptoFrame {
     fn buf_len(&self) -> usize {
-        let size = 1; // type id
-        let size = size + if self.offset > 0 { VarLen(self.offset).buf_len() } else { 0 };
-        let size = size + self.len.map(VarLen).buf_len();
-        let size = size + self.payload.len();
-        size
+        2 + self.payload.len()
     }
 }
 
 impl Codec for CryptoFrame {
     fn encode<T: BufMut>(&self, buf: &mut T) {
-        let has_offset = if self.offset > 0 { 0x04 } else { 0 };
-        let has_len = if self.len.is_some() { 0x02 } else { 0 };
-        buf.put_u8(0x10 | has_offset | has_len);
-        if self.offset > 0 {
-            VarLen(self.offset).encode(buf);
-        }
-        if let Some(len) = self.len {
-            VarLen(len).encode(buf);
-        }
+        buf.put_u16_be(self.len);
         buf.put_slice(&self.payload);
     }
 
     fn decode<T: Buf>(buf: &mut T) -> QuicResult<Self> {
-        let first = buf.get_u8();
-        let offset = if first & 0x04 > 0 {
-            VarLen::decode(buf)?.0
-        } else {
-            0
-        };
-        let len = if first & 0x02 > 0 {
-            VarLen::decode(buf)?.0
-        } else {
-            buf.remaining() as u64
-        };
+        let len = buf.get_u16_be();
         let mut payload = vec![0u8; len as usize];
         buf.copy_to_slice(&mut payload);
-
-        Ok(CryptoFrame {
-            offset,
-            len: if first & 0x02 > 0 { Some(len) } else { None },
-            payload,
-        })
+        Ok(CryptoFrame {len, payload})
     }
 }
 
@@ -424,6 +401,27 @@ mod tests {
         let mut buf = Vec::with_capacity(64);
         obj.encode(&mut buf);
         assert_eq!(&buf, bytes);
+
+        let mut read = Cursor::new(bytes);
+        let decoded = super::Frame::decode(&mut read).unwrap();
+        assert_eq!(decoded, obj);
+    }
+
+    #[test]
+    fn test_crypto_round_trip() {
+        let payload = b"\x0d\x9c\xf7\x55\x86\x00\x00\x00";
+        let obj = super::Frame::Crypto(super::CryptoFrame {
+            len     : payload.len() as u16,
+            payload : payload.to_vec(),
+        });
+        let bytes = b"\x0b\x00\x08\x0d\x9c\xf7\x55\x86\x00\x00\x00";
+        assert_eq!(obj.buf_len(), bytes.len());
+
+        let mut buf = Vec::with_capacity(64);
+        obj.encode(&mut buf);
+        println!("{:?}", buf);
+        assert_eq!(buf.len(), obj.buf_len());
+
 
         let mut read = Cursor::new(bytes);
         let decoded = super::Frame::decode(&mut read).unwrap();

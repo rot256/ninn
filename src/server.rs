@@ -13,7 +13,7 @@ use std::collections::{hash_map::Entry, HashMap};
 use std::net::{SocketAddr, ToSocketAddrs};
 use std::sync::Arc;
 
-use handshake::SecretKey;
+use noise::SecretKey;
 
 use tokio::{self, net::UdpSocket};
 
@@ -46,7 +46,7 @@ impl Server {
 
         let (dst_cid, ptype) = {
             let partial = PartialDecode::new(packet)?;
-            debug!("incoming packet: {:?} {:?}", addr, partial.header);
+            println!("debug : incoming packet: {:?} {:?}", addr, partial.header);
             (partial.dst_cid(), partial.header.ptype())
         };
 
@@ -74,7 +74,7 @@ impl Server {
                 let mut sink = inner.get_mut();
                 forward_packet(sink, packet.to_vec())?;
             }
-            Entry::Vacant(_) => debug!("connection ID {:?} unknown", cid),
+            Entry::Vacant(_) => println!("debug : connection ID {:?} unknown", cid),
         }
 
         Ok(())

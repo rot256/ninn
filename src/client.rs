@@ -5,6 +5,7 @@ use conn_state::ConnectionState;
 use parameters::ClientTransportParameters;
 use streams::Streams;
 use handshake;
+use noise;
 
 use std::net::{SocketAddr, ToSocketAddrs};
 
@@ -17,11 +18,11 @@ pub struct Client {
 }
 
 impl Client {
-    pub fn connect(server: &str, port: u16, server_static: handshake::PublicKey) -> QuicResult<ConnectFuture> {
+    pub fn connect(server: &str, port: u16, server_static: noise::PublicKey) -> QuicResult<ConnectFuture> {
         ConnectFuture::new(Self::new(server, port, server_static)?)
     }
 
-    pub(crate) fn new(server: &str, port: u16, server_static: handshake::PublicKey) -> QuicResult<Client> {
+    pub(crate) fn new(server: &str, port: u16, server_static: noise::PublicKey) -> QuicResult<Client> {
         let handshake = handshake::client_session(server_static, None, ClientTransportParameters::default().clone());
         Self::with_state(server, port, ConnectionState::new(handshake, None))
     }
@@ -115,24 +116,5 @@ impl Future for ConnectFuture {
         } else {
             Ok(Async::NotReady)
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use conn_state::tests::client_conn_state;
-    use futures::Future;
-    use server::Server;
-    use tls::tests::server_config;
-    use tokio::runtime::current_thread::Runtime;
-
-    #[test]
-    fn test_client_connect_resolves() {
-        let server = Server::new("127.0.0.1", 4433, server_config()).unwrap();
-        let client = super::Client::with_state("127.0.0.1", 4433, client_conn_state()).unwrap();
-        let connector = super::ConnectFuture::new(client).unwrap();
-        let mut exec = Runtime::new().unwrap();
-        exec.spawn(server.map_err(|_| ()));
-        exec.block_on(connector).unwrap();
     }
 }
