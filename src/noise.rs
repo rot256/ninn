@@ -1,7 +1,6 @@
 use ring::digest;
 use ring::hmac;
 use ring::hkdf;
-
 use ring::aead;
 
 use ring::aead::CHACHA20_POLY1305;
@@ -71,11 +70,11 @@ impl State {
         self.mix_hash(&buf);
     }
 
-    pub fn encrypt_and_hash(&mut self, plaintext: &[u8]) -> (Vec<u8>, AuthenticationTag) {
+    pub fn encrypt_and_hash(&mut self, pt: &[u8]) -> (Vec<u8>, AuthenticationTag) {
         let nonce   = [0; 12];
         let temp    = self.temp.unwrap();
         let aead    = aead::SealingKey::new(&CHACHA20_POLY1305, &temp).unwrap();
-        let mut buf = vec![0; CHACHA20_POLY1305.tag_len() + plaintext.len()];
+        let mut buf = vec![0; CHACHA20_POLY1305.tag_len() + pt.len()];
 
         aead::seal_in_place(
             &aead,
@@ -86,30 +85,33 @@ impl State {
         ).unwrap();
 
         let mut tag = [0; 16];
-        tag.copy_from_slice(&buf[plaintext.len()..]);
-        let ct = buf[..plaintext.len()].to_vec();
+        let ct      = buf[..pt.len()].to_vec();
+        tag.copy_from_slice(&buf[pt.len()..]);
+
+        println!("debug : encrypted, tag = {:?}, ct = {:?}", tag, ct);
 
         self.mix_tag_and_ct(&tag, &ct);
 
         (ct, tag)
     }
 
-    pub fn decrypt_and_hash(&mut self, ciphertext: &[u8], tag: &AuthenticationTag) -> QuicResult<Vec<u8>> {
-        let nonce   = [0; 12];
-        let temp    = self.temp.unwrap();
-        let aead    = aead::OpeningKey::new(&CHACHA20_POLY1305, &temp).unwrap();
-        let mut pt = vec![0; ciphertext.len()];
-        let mut ct = ciphertext.to_vec();
+    pub fn decrypt_and_hash(&mut self, ct: &[u8], tag: &AuthenticationTag) -> QuicResult<Vec<u8>> {
+        let nonce  = [0; 12];
+        let temp   = self.temp.unwrap();
+        let aead   = aead::OpeningKey::new(&CHACHA20_POLY1305, &temp).unwrap();
+        let mut pt = vec![0; ct.len()];
 
-        ct.extend(tag.iter());
-        pt.copy_from_slice(ciphertext);
+        println!("debug : decrypting, tag = {:?}, ct = {:?}", tag, ct);
 
-        match aead::open_in_place(&aead, &nonce, &self.hs, 0, &mut ct) {
+        pt.copy_from_slice(ct);
+        pt.extend(tag.iter());
+
+        match aead::open_in_place(&aead, &nonce, &self.hs, 0, &mut pt) {
             Ok(n)  => Ok(n),
             Err(_) => Err(QuicError::General("failed to authenticat".to_owned())),
         }?;
 
-        self.mix_tag_and_ct(tag, ciphertext);
-        Ok(ct)
+        self.mix_tag_and_ct(tag, &ct);
+        Ok(pt)
     }
 }

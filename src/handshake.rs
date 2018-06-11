@@ -76,7 +76,7 @@ impl Codec for HandshakeRequest {
         let mut msg = HandshakeRequest{
             ephemeral   : [0; 32],
             static_tag  : [0; 16],
-            static_ct   : vec![],
+            static_ct   : vec![0; 32],
             payload_tag : [0; 16],
             payload_ct  : vec![],
         };
@@ -166,6 +166,8 @@ impl ClientSession {
 
         self.st.mix_key(&diffie_hellman(&self.e, &self.rs));
 
+        println!("debug : noise_state = {:?}", self.st);
+
         // noise : s
 
         let spk = generate_public(&self.s);
@@ -174,14 +176,13 @@ impl ClientSession {
 
         // noise : ss
 
-        let mut params = Vec::new();
-        self.params.encode(&mut params);
+        self.st.mix_key(&diffie_hellman(&self.s, &self.rs));
 
         // encrypt payload
 
-        self.st.mix_key(&diffie_hellman(&self.s, &self.rs));
+        let mut params = Vec::new();
+        self.params.encode(&mut params);
         let (pct, ptag) = self.st.encrypt_and_hash(&params);
-        println!("debug : noise_state = {:?}", self.st);
 
         // serialize
 
@@ -208,10 +209,7 @@ impl Session for ServerSession {
 
         let mut read = Cursor::new(msg);
         let decoded  = HandshakeRequest::decode(&mut read)?;
-
-        // duplicate noise state
-
-        let mut st = self.st;
+        let mut st   = self.st;
 
         // noise : e
 
@@ -223,16 +221,15 @@ impl Session for ServerSession {
 
         // noise : s
 
-        println!("debug : noise_state = {:?}", st);
-        println!("debug : attempt decryption of client identity");
+        let rs = st.decrypt_and_hash(&decoded.static_ct, &decoded.static_tag)?;
 
-        let pt = st.decrypt_and_hash(&decoded.static_ct, &decoded.static_tag)?;
+        println!("debug : client identity = {:?}", rs);
 
-        println!("debug : done");
+        // noise : ss
+
+        st.mix_key(&diffie_hellman(&self.s, &self.rs));
 
         Err(QuicError::General("random".to_owned()))
-
-        // Ok((Some(message), None))
     }
 }
 
