@@ -6,6 +6,8 @@ use std::collections::VecDeque;
 use std::io::Cursor;
 use std::mem;
 
+use hex;
+
 use super::{QuicError, QuicResult, QUIC_VERSION};
 use codec::Codec;
 use crypto::Secret;
@@ -205,9 +207,9 @@ where
     }
 
     pub(crate) fn handle(&mut self, buf: &mut [u8]) -> QuicResult<()> {
-        println!("debug : handle {:?}", buf);
+        println!("debug : handle packet");
+        println!("  buf = {}", hex::encode(&buf));
         let pdecode = PartialDecode::new(buf)?;
-        println!("debug : partial decoded");
         self.handle_partial(pdecode)
     }
 
@@ -252,7 +254,6 @@ where
 
     #[cfg_attr(feature = "cargo-clippy", allow(needless_pass_by_value))]
     fn handle_packet(&mut self, header: Header, payload: Vec<Frame>) -> QuicResult<()> {
-        println!("debug : handle packet {:?}", payload);
         let (dst_cid, number) = match header {
             Header::Long {
                 dst_cid,
@@ -292,11 +293,10 @@ where
 
         let mut send_ack = false;
         for frame in &payload {
-            println!("debug : frame {:?}", frame);
+            println!("debug : decoded frame:");
+            println!("debug :   {:?}", frame);
             match frame {
                 Frame::Crypto(f) => {
-                    println!("debug : crypto frame:");
-                    println!("debug :   {:?}", f);
                     self.handle_handshake_message(&f.payload);
                 }
                 Frame::Stream(f) => {

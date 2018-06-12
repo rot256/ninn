@@ -6,8 +6,12 @@ extern crate failure_derive;
 extern crate futures;
 #[macro_use]
 extern crate log;
+#[macro_use]
+extern crate lazy_static;
+extern crate hex;
 extern crate rand;
 extern crate ring;
+extern crate snow;
 extern crate rustls;
 extern crate tokio;
 extern crate webpki;

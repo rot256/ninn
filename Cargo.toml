@@ -14,6 +14,7 @@ bytes = "0.4.7"
 failure = "0.1"
 failure_derive = "0.1"
 futures = "0.1"
+hex = "0.3.2"
 log = "0.4"
 tokio = "0.1"
 rand = "=0.5.0-pre.2"
@@ -21,11 +22,17 @@ ring = "0.13.0-alpha"
 webpki = "0.18.0-alpha"
 webpki-roots = "0.14"
 x25519-dalek = "0.2.0"
+lazy_static = "*"
 
 [dependencies.rustls]
 git = "https://github.com/ctz/rustls"
 branch = "jbp-tls13-draft-28"
 features = ["quic"]
+
+[dependencies.snow]
+# git = "https://github.com/rot256/snow"
+# branch = "master"
+path = "../snow"
 
 [dev-dependencies]
 env_logger = "0.5"

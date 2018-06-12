@@ -93,7 +93,6 @@ impl Codec for Frame {
                 StreamIdBlockedFrame::decode(buf)?
             }),
             CRYPTO_FRAME_ID => Frame::Crypto({
-                println!("debug : decoding crypto frame");
                 buf.get_u8();
                 CryptoFrame::decode(buf)?
             }),

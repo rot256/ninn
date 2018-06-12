@@ -8,16 +8,24 @@ use codec::{BufLen, Codec, VarLen};
 use std::io::Cursor;
 use std::str;
 
-use noise;
+use hex;
 
 use x25519_dalek::generate_secret;
 use x25519_dalek::generate_public;
 use x25519_dalek::diffie_hellman;
 
-use ring::aead::AES_128_GCM;
+use ring::aead::AES_256_GCM;
 use ring::digest::SHA256;
 
-const STATIC_DUMMY_SECRET : noise::SecretKey = [
+use snow;
+use snow::NoiseBuilder;
+use snow::params::NoiseParams;
+
+lazy_static! {
+    static ref PARAMS: NoiseParams = "Noise_IK_25519_ChaChaPoly_SHA256".parse().unwrap();
+}
+
+const STATIC_DUMMY_SECRET : [u8; 32] = [
     0xe0, 0xb0, 0xc4, 0x42, 0x98, 0xfc, 0x1c, 0x14,
     0x9a, 0xfb, 0xf4, 0xc8, 0x99, 0x6f, 0xb9, 0x24,
     0x27, 0xae, 0x41, 0xe4, 0x64, 0x9b, 0x93, 0x4c,
@@ -25,130 +33,78 @@ const STATIC_DUMMY_SECRET : noise::SecretKey = [
 ];
 
 pub struct ClientSession {
-    e      : noise::SecretKey,
-    s      : noise::SecretKey,
-    rs     : noise::PublicKey,
-    st     : noise::State,
-    params : ClientTransportParameters,
+    session    : snow::Session,
+    params     : ClientTransportParameters,
 }
 
 pub struct ServerSession {
-    e      : noise::SecretKey,
-    s      : noise::SecretKey,
-    rs     : noise::PublicKey,
-    st     : noise::State,
-    params : ServerTransportParameters,
+    session    : snow::Session,
+    params     : ServerTransportParameters,
 }
 
 const HANDSHAKE_REQUEST_FIXED_LEN  : usize = 32 + 16 + 32 + 16;
 const HANDSHAKE_RESPONSE_FIXED_LEN : usize = 32 + 16;
-
-pub struct HandshakeRequest {
-    ephemeral   : noise::PublicKey,
-    static_tag  : noise::AuthenticationTag,
-    static_ct   : Vec<u8>,
-    payload_tag : noise::AuthenticationTag,
-    payload_ct  : Vec<u8>,
-}
-
-pub struct HandshakeResponse {
-    ephemeral   : noise::PublicKey,
-    payload_tag : noise::AuthenticationTag,
-    payload     : Vec<u8>,
-}
-
-impl BufLen for HandshakeRequest {
-    fn buf_len(&self) -> usize {
-        HANDSHAKE_REQUEST_FIXED_LEN + self.payload_ct.len()
-    }
-}
-
-impl Codec for HandshakeRequest {
-    fn encode<T: BufMut>(&self, buf: &mut T) {
-        buf.put_slice(&self.ephemeral);
-        buf.put_slice(&self.static_tag);
-        buf.put_slice(&self.static_ct);
-        buf.put_slice(&self.payload_tag);
-        buf.put_slice(&self.payload_ct);
-    }
-
-    fn decode<T: Buf>(buf: &mut T) -> QuicResult<Self> {
-        let mut msg = HandshakeRequest{
-            ephemeral   : [0; 32],
-            static_tag  : [0; 16],
-            static_ct   : vec![0; 32],
-            payload_tag : [0; 16],
-            payload_ct  : vec![],
-        };
-
-        // read fixed sized fields
-
-        buf.copy_to_slice(&mut msg.ephemeral);
-        buf.copy_to_slice(&mut msg.static_tag);
-        buf.copy_to_slice(&mut msg.static_ct);
-        buf.copy_to_slice(&mut msg.payload_tag);
-
-        // eat variable size field
-
-        msg.payload_ct = vec![0; buf.remaining()];
-        buf.copy_to_slice(&mut msg.payload_ct);
-
-        Ok(msg)
-    }
-}
-
-impl BufLen for HandshakeResponse {
-    fn buf_len(&self) -> usize {
-        HANDSHAKE_RESPONSE_FIXED_LEN + self.payload.len()
-    }
-}
 
 pub trait Session {
     fn process_handshake_message(&mut self, &[u8]) -> QuicResult<HandshakeResult>;
 }
 
 pub fn client_session(
-    remote   : noise::PublicKey,
-    identity : Option<noise::SecretKey>,
-    params   : ClientTransportParameters,
+    remote_key : [u8; 32],
+    static_key : Option<[u8; 32]>,
+    params     : ClientTransportParameters,
 ) -> ClientSession {
-    let mut csprng = OsRng::new().unwrap();
+    let builder    = NoiseBuilder::new(PARAMS.clone());
+    let static_key = static_key.unwrap_or(STATIC_DUMMY_SECRET);
     ClientSession{
-        e     : generate_secret(&mut csprng),
-        s     : identity.unwrap_or(STATIC_DUMMY_SECRET),
-        rs    : remote,
-        st    : noise::new_state(),
+        session : builder
+            .local_private_key(&static_key)
+            .remote_public_key(&remote_key)
+            .build_initiator().unwrap(),
         params,
     }
 }
 
 pub fn server_session(
-    identity : noise::SecretKey,
-    params   : ServerTransportParameters,
+    static_key : [u8; 32],
+    params     : ServerTransportParameters,
 ) -> ServerSession {
-    let mut csprng = OsRng::new().unwrap();
+    let builder = NoiseBuilder::new(PARAMS.clone());
     ServerSession {
-        e      : generate_secret(&mut csprng),
-        s      : identity,
-        rs     : [0; 32],
-        st     : noise::new_state(),
-        params : params,
+        session : builder
+            .local_private_key(&static_key)
+            .build_responder().unwrap(),
+        params,
     }
 }
 
 impl Session for ClientSession {
     fn process_handshake_message(&mut self, msg: &[u8]) -> QuicResult<HandshakeResult> {
 
-        println!("debug : client: process handshake message");
+        // process handshake response
 
-        let k1 = vec![0x0, 0x1, 0x2, 0x3, 0x4, 0x5, 0x6, 0x7, 0x8, 0x9, 0xa, 0xb, 0xc, 0xd, 0xe, 0xf];
-        let k2 = vec![0x0, 0x1, 0x2, 0x3, 0x4, 0x5, 0x6, 0x7, 0x8, 0x9, 0xa, 0xb, 0xc, 0xd, 0xe, 0xf];
+        let mut payload = vec![0u8; 65535];
+        match self.session.read_message(msg, &mut payload) {
+            Ok(n)  => {
+                // TODO: parse server transport parameters
 
-        let secret  = Secret::For1Rtt(&AES_128_GCM, &SHA256, k1, k2);
+                // export transport keys
 
-        // send transport message
+                println!("debug : exporting key material from Noise:");
 
-        Ok((None, Some(secret)))
+                assert!(self.session.is_initiator());
+                assert!(self.session.is_handshake_finished());
+
+                let (k1, k2) = self.session.export().unwrap();
+                let secret   = Secret::For1Rtt(&AES_256_GCM, &SHA256, k1.to_vec(), k2.to_vec());
+
+                println!("debug :   i->r : {}", hex::encode(k1));
+                println!("debug :   i<-r : {}", hex::encode(k2));
+
+                Ok((None, Some(secret)))
+            },
+            Err(_) => Err(QuicError::General("failed to decrypt noise".to_owned()))
+        }
     }
 }
 
@@ -156,47 +112,13 @@ impl Session for ClientSession {
 impl ClientSession {
     pub fn create_handshake_request(&mut self) -> QuicResult<Vec<u8>> {
 
-        // noise : e
+        let mut payload = Vec::new();
+        self.params.encode(&mut payload);
 
-        let eph = generate_public(&self.e);
-        let eph = eph.to_bytes();
-        self.st.mix_hash(&eph);
+        let mut msg = vec![0u8; 65535];
+        let len = self.session.write_message(&payload, &mut msg).unwrap();
 
-        // noise : se
-
-        self.st.mix_key(&diffie_hellman(&self.e, &self.rs));
-
-        println!("debug : noise_state = {:?}", self.st);
-
-        // noise : s
-
-        let spk = generate_public(&self.s);
-        let spk = spk.to_bytes();
-        let (sct, stag) = self.st.encrypt_and_hash(&spk);
-
-        // noise : ss
-
-        self.st.mix_key(&diffie_hellman(&self.s, &self.rs));
-
-        // encrypt payload
-
-        let mut params = Vec::new();
-        self.params.encode(&mut params);
-        let (pct, ptag) = self.st.encrypt_and_hash(&params);
-
-        // serialize
-
-        Ok({
-            let mut msg = Vec::new();
-            HandshakeRequest{
-                ephemeral   : eph,
-                static_tag  : stag,
-                static_ct   : sct,
-                payload_tag : ptag,
-                payload_ct  : pct,
-            }.encode(&mut msg);
-            msg
-        })
+        Ok(msg[..len].to_owned())
     }
 }
 
@@ -205,31 +127,31 @@ impl Session for ServerSession {
 
         println!("debug : server : process handshake message");
 
-        // deserialize handshake request
+        let mut payload = vec![0u8; 65535];
+        match self.session.read_message(msg, &mut payload) {
+            Ok(n)  => {
 
-        let mut read = Cursor::new(msg);
-        let decoded  = HandshakeRequest::decode(&mut read)?;
-        let mut st   = self.st;
+                // TODO: parse client transport parameters
 
-        // noise : e
+                // TODO: validate initial_version
 
-        st.mix_hash(&decoded.ephemeral);
+                // TODO: check client identity (pass to application)
 
-        // noise : se
+                println!("debug : client identity {:?}", self.session.get_remote_static());
 
-        st.mix_key(&diffie_hellman(&self.s, &decoded.ephemeral));
+                // create handshake response
 
-        // noise : s
-
-        let rs = st.decrypt_and_hash(&decoded.static_ct, &decoded.static_tag)?;
-
-        println!("debug : client identity = {:?}", rs);
-
-        // noise : ss
-
-        st.mix_key(&diffie_hellman(&self.s, &self.rs));
-
-        Err(QuicError::General("random".to_owned()))
+                Ok((Some({
+                    let mut payload = Vec::new();
+                    let mut msg = vec![0u8; 65535];
+                    self.params.encode(&mut payload);
+                    let len = self.session.write_message(&payload, &mut msg).unwrap();
+                    assert!(self.session.is_handshake_finished());
+                    msg[..len].to_owned()
+                }), None))
+            },
+            Err(_) => Err(QuicError::General("failed to decrypt noise".to_owned()))
+        }
     }
 }
 
