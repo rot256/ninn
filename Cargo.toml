@@ -30,3 +30,4 @@ features = ["quic"]
 [dev-dependencies]
 env_logger = "0.5"
 untrusted = "0.6"
+hex = "*"
