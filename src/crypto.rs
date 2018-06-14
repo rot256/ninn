@@ -6,7 +6,7 @@ use std::io::Cursor;
 use ring::aead::{self, OpeningKey, SealingKey};
 use ring::{digest, hkdf};
 
-pub use ring::aead::AES_128_GCM;
+pub use ring::aead::AES_256_GCM;
 pub use ring::digest::SHA256;
 pub use ring::hmac::SigningKey;
 
@@ -26,7 +26,7 @@ pub enum Secret {
 impl Secret {
     pub fn tag_len(&self) -> usize {
         match self {
-            Secret::Handshake(_) => AES_128_GCM.tag_len(),
+            Secret::Handshake(_) => AES_256_GCM.tag_len(),
             Secret::For1Rtt(aead_alg, _, _, _) => aead_alg.tag_len(),
         }
     }
@@ -41,7 +41,7 @@ impl Secret {
                     b"server hs"
                 };
                 PacketKey::new(
-                    &AES_128_GCM,
+                    &AES_256_GCM,
                     &SHA256,
                     &expanded_handshake_secret(*cid, label),
                 )
@@ -185,7 +185,7 @@ mod tests {
                          \x0f\x65\xb4\xd8\xae\x88\xa0\x61\x1e\xe4\x9d\xb0\xb5\x23\x59\x1d";
         assert_eq!(&client_handshake_secret, expected);
         let input = super::PacketKey::new(
-            &super::AES_128_GCM,
+            &super::AES_256_GCM,
             &super::SHA256,
             &client_handshake_secret,
         );

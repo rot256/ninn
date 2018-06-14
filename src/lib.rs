@@ -21,6 +21,8 @@ extern crate x25519_dalek;
 pub use client::Client;
 pub use server::Server;
 
+// TODO: maybe not needed
+
 mod client;
 mod codec;
 mod conn_state;
@@ -32,7 +34,7 @@ pub mod http;
 mod packet;
 mod parameters;
 mod server;
-mod streams;
+pub mod streams;
 pub mod handshake;
 mod types;
 

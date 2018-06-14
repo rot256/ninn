@@ -23,6 +23,7 @@ pub struct ConnectionState<T> {
     state: State,
     local: PeerData,
     remote: PeerData,
+    dst_pn: u32,
     src_pn: u32,
     secret: Secret,
     prev_secret: Option<Secret>,
@@ -31,6 +32,22 @@ pub struct ConnectionState<T> {
     control: VecDeque<Frame>,
     handshake: T,
     pmtu: usize,
+}
+
+fn recover_packet_number(current : u32, pn : u32, t : ShortType) -> u32 {
+    let mask = match t {
+        ShortType::One  => 0xffff_ff00,
+        ShortType::Two  => 0xffff_0000,
+        ShortType::Four => 0x0000_0000,
+    };
+
+    let new = (current & mask) | pn;
+    let off = (mask & 0xffff_ffff) + 1;
+    return if new < current {
+        new + off
+    } else {
+        new
+    }
 }
 
 impl<T> ConnectionState<T>
@@ -73,6 +90,7 @@ where
             remote: PeerData::new(dst_cid),
             local,
             src_pn: rng.gen(),
+            dst_pn: 0,
             secret,
             prev_secret: None,
             streams,
@@ -132,7 +150,7 @@ where
             } else {
                 (Some(LongType::Handshake), State::Handshaking)
             }
-            State::FinalHandshake => (Some(LongType::Handshake), State::Connected),
+            State::ConfirmHandshake => (Some(LongType::Handshake), State::ConfirmHandshake),
         };
 
         let header_len = match ptype {
@@ -149,6 +167,7 @@ where
         } else {
             &self.secret
         };
+
         let key = secret.build_key(self.side);
         let tag_len = key.algorithm().tag_len();
 
@@ -156,6 +175,7 @@ where
         let payload_len = {
             let mut write = Cursor::new(&mut buf[header_len..self.pmtu - tag_len]);
             while let Some(frame) = self.control.pop_front() {
+                println!("debug :   control frame {:?}", frame);
                 frame.encode(&mut write);
             }
             self.streams.poll_send(&mut write);
@@ -189,6 +209,9 @@ where
                 number,
             },
         };
+
+        println!("{:?}", header);
+
         {
             let mut write = Cursor::new(&mut buf[..header_len]);
             header.encode(&mut write);
@@ -221,24 +244,36 @@ where
         } = partial;
 
         let key = {
-            let secret = if let Some(LongType::Handshake) = header.ptype() {
-                if let Some(ref secret @ Secret::Handshake(_)) = self.prev_secret {
-                    secret
-                } else {
-                    &self.secret
-                }
-            } else {
-                &self.secret
-            };
+            let secret = &self.secret;
             secret.build_key(self.side.other())
         };
+
+        println!("debug :  state = {:?}", &self.state);
+
+        println!("{:?}", header);
 
         let payload = match header {
             Header::Long { number, .. } | Header::Short { number, .. } => {
                 let (header_buf, payload_buf) = buf.split_at_mut(header_len);
-                let decrypted = key.decrypt(number, &header_buf, payload_buf)?;
-                let mut read = Cursor::new(decrypted);
 
+                let number = match header {
+                    Header::Short { ptype, .. } =>
+                        recover_packet_number(self.dst_pn, number, ptype),
+                    _ => number,
+                };
+
+                let decrypted = key.decrypt(number, &header_buf, payload_buf)?;
+
+                self.dst_pn = number;
+
+                // implicit confirmation
+
+                match self.state {
+                    State::ConfirmHandshake => self.state = State::Connected,
+                    _ => (),
+                }
+
+                let mut read = Cursor::new(decrypted);
                 let mut payload = Vec::new();
                 while read.has_remaining() {
                     let frame = Frame::decode(&mut read)?;
@@ -300,6 +335,7 @@ where
                     self.handle_handshake_message(&f.payload);
                 }
                 Frame::Stream(f) => {
+                    assert!(self.state == State::Connected);
                     send_ack = true;
                     self.streams.received(f)?;
                 }
@@ -342,11 +378,7 @@ where
         // process new key material
 
         if let Some(secret) = new_secret {
-            self.set_secret(secret);
-            self.state = match self.side {
-                Side::Client => State::FinalHandshake,
-                Side::Server => State::Connected,
-            };
+
 
             /* TODO
             let params = match self.tls.get_quic_transport_parameters() {
@@ -380,12 +412,30 @@ where
             };
             self.streams.update_max_id(max_send_bidi);
             self.streams.update_max_id(max_send_uni);
+
+            // update secret
+
+            self.set_secret(secret);
+
+            // update state
+
+            match self.side {
+                Side::Client => {
+                    self.state = State::Connected;
+                    self.control.push_back(Frame::Padding(PaddingFrame(1))); // TODO : less hacky
+                },
+                Side::Server => {
+                    self.state = State::ConfirmHandshake;
+                }
+            };
         }
 
         // send new message
 
         if let Some(msg) = new_msg {
-            println!("debug : send handshake message: {:?}", msg);
+            assert!(self.is_handshaking());
+            println!("debug : send handshake message");
+            println!("debug :   msg = {} ", hex::encode(&msg));
             self.control.push_back(Frame::Crypto(CryptoFrame {
                 len     : msg.len() as u16,
                 payload : msg,
@@ -428,7 +478,7 @@ enum State {
     Start,
     InitialSent,
     Handshaking,
-    FinalHandshake,
+    ConfirmHandshake,
     Connected,
 }
 

@@ -388,7 +388,7 @@ mod tests {
     }
 
     #[test]
-    fn test_ack_round_trip() {
+    fn test_ack_roundtrip() {
         let obj = super::Frame::Ack(super::AckFrame {
             largest: 485971334,
             ack_delay: 0,

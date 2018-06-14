@@ -119,8 +119,11 @@ impl Codec for Header {
                 let key_phase_bit = if key_phase { 0x40 } else { 0 };
                 buf.put_u8(key_phase_bit | 0x20 | 0x10 | ptype.to_byte());
                 buf.put_slice(&dst_cid);
-                debug_assert_eq!(ptype, ShortType::Two);
-                buf.put_u16_be(number as u16);
+                match ptype {
+                    ShortType::One  => buf.put_u8(number as u8),
+                    ShortType::Two  => buf.put_u16_be(number as u16),
+                    ShortType::Four => buf.put_u32_be(number as u32),
+                };
             }
             Header::Negotiation {
                 dst_cid,
@@ -275,5 +278,38 @@ impl ShortType {
             2 => Four,
             _ => panic!("invalid short packet type {}", v),
         }
+    }
+}
+
+
+#[cfg(test)]
+mod tests {
+    use hex;
+    use codec::Codec;
+    use types::ConnectionId;
+    use std::io::Cursor;
+
+    #[test]
+    fn test_short_roundtrip() {
+        let con : [u8; 8] = [
+            0x38, 0xa7, 0xe6, 0x55,
+            0xbf, 0x62, 0xf5, 0xf7
+        ];
+        let header = super::Header::Short {
+            key_phase: false,
+            ptype: super::ShortType::Two,
+            dst_cid: ConnectionId::new(&con),
+            number: 3152957029,
+        };
+
+        let mut bytes = Vec::with_capacity(64);
+        header.encode(&mut bytes);
+
+        println!("encoded : {}", hex::encode(&bytes));
+
+        let mut read = Cursor::new(bytes);
+        let decoded  = super::Header::decode(&mut read).unwrap();
+
+        assert_eq!(decoded, header);
     }
 }

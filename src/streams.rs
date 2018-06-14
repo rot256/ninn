@@ -26,6 +26,7 @@ impl Streams {
             OpenStreams::new(),
             OpenStreams::new(),
         ];
+
         open[0].next = Some(0);
 
         Self {
@@ -93,6 +94,8 @@ impl Streams {
             let frame = Frame::Stream(frame);
             frame.encode(payload);
         }
+
+        println!("debug : streams poll_send");
     }
 
     pub fn get_stream(&self, id: u64) -> Option<StreamRef> {
@@ -107,7 +110,7 @@ impl Streams {
         }
     }
 
-    pub fn init_send(&mut self, dir: Dir) -> QuicResult<StreamRef> {
+    pub fn init_send(&self, dir: Dir) -> QuicResult<StreamRef> {
         let mut me = self.inner.lock().unwrap();
         let stype = (me.side.to_bit() + dir.to_bit()) as usize;
         let next = me.open[stype].next;
@@ -224,7 +227,7 @@ pub struct StreamRef {
 }
 
 impl StreamRef {
-    pub fn send(&mut self, buf: &[u8]) -> QuicResult<()> {
+    pub fn send(&self, buf: &[u8]) -> QuicResult<()> {
         if buf.is_empty() {
             return Ok(());
         }

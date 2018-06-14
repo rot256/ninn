@@ -90,7 +90,7 @@ impl Session for ClientSession {
 
                 // export transport keys
 
-                println!("debug : exporting key material from Noise:");
+                println!("debug : client exporting key material from Noise:");
 
                 assert!(self.session.is_initiator());
                 assert!(self.session.is_handshake_finished());
@@ -107,7 +107,6 @@ impl Session for ClientSession {
         }
     }
 }
-
 
 impl ClientSession {
     pub fn create_handshake_request(&mut self) -> QuicResult<Vec<u8>> {
@@ -141,14 +140,34 @@ impl Session for ServerSession {
 
                 // create handshake response
 
-                Ok((Some({
+                let resp = {
                     let mut payload = Vec::new();
                     let mut msg = vec![0u8; 65535];
                     self.params.encode(&mut payload);
                     let len = self.session.write_message(&payload, &mut msg).unwrap();
                     assert!(self.session.is_handshake_finished());
                     msg[..len].to_owned()
-                }), None))
+                };
+
+                // export transport keys
+
+                println!("debug : server exporting key material from Noise:");
+
+                assert!(!self.session.is_initiator());
+                assert!(self.session.is_handshake_finished());
+
+                let (k1, k2) = self.session.export().unwrap();
+                let secret   = Secret::For1Rtt(
+                    &AES_256_GCM,
+                    &SHA256,
+                    k1.to_vec(),
+                    k2.to_vec()
+                );
+
+                println!("debug :   i->r : {}", hex::encode(k1));
+                println!("debug :   i<-r : {}", hex::encode(k2));
+
+                Ok((Some(resp), Some(secret)))
             },
             Err(_) => Err(QuicError::General("failed to decrypt noise".to_owned()))
         }
