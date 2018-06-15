@@ -21,8 +21,6 @@ extern crate x25519_dalek;
 pub use client::Client;
 pub use server::Server;
 
-// TODO: maybe not needed
-
 mod client;
 mod codec;
 mod conn_state;

@@ -437,7 +437,7 @@ where
             println!("debug : send handshake message");
             println!("debug :   msg = {} ", hex::encode(&msg));
             self.control.push_back(Frame::Crypto(CryptoFrame {
-                len     : msg.len() as u16,
+                len     : Some(msg.len() as u64),
                 payload : msg,
             }));
         }
@@ -452,7 +452,7 @@ impl ConnectionState<handshake::ClientSession> {
         let msg = self.handshake.create_handshake_request()?;
         debug_assert!(msg.len() < (1 << 16));
         self.control.push_back(Frame::Crypto(CryptoFrame{
-            len     : msg.len() as u16,
+            len     : Some(msg.len() as u64),
             payload : msg,
         }));
         Ok(())

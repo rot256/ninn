@@ -160,19 +160,28 @@ impl Codec for StreamFrame {
             0
         };
 
-        let len = if first & 0x02 > 0 {
-            VarLen::decode(buf)?.0
-        } else {
-            buf.remaining() as u64
+        let rem = buf.remaining() as u64;
+        let (len, consume) = match first & 0x02 {
+            0 => (None, rem),
+            _ => {
+                let len = VarLen::decode(buf)?.0;
+                if len > rem {
+                    return Err(
+                        QuicError::DecodeError("length too great".to_string())
+                    );
+                }
+                (Some(len), len)
+            }
         };
-        let mut data = vec![0u8; len as usize];
+
+        let mut data = vec![0u8; consume as usize];
         buf.copy_to_slice(&mut data);
 
         Ok(StreamFrame {
             id,
             fin: first & 0x01 > 0,
             offset,
-            len: if first & 0x02 > 0 { Some(len) } else { None },
+            len,
             data,
         })
     }
@@ -180,25 +189,67 @@ impl Codec for StreamFrame {
 
 #[derive(Debug, PartialEq)]
 pub struct CryptoFrame {
-    pub len     : u16,
+    pub len     : Option<u64>,
     pub payload : Vec<u8>,
 }
 
 impl BufLen for CryptoFrame {
     fn buf_len(&self) -> usize {
-        2 + self.payload.len()
+        match self.len {
+            Some(l) => 1 + VarLen(l).buf_len() + self.payload.len(),
+            None    => 1 + self.payload.len(),
+        }
     }
 }
 
 impl Codec for CryptoFrame {
+    /* Flags:
+     *  has_offset : The offset should always be zero, hence can be omitted entirely
+     */
     fn encode<T: BufMut>(&self, buf: &mut T) {
-        buf.put_u16_be(self.len);
+        match self.len {
+            Some(len) => {
+                buf.put_u8(0x12);
+                VarLen(len).encode(buf);
+            },
+            None => {
+                buf.put_u8(0x10);
+            }
+        }
         buf.put_slice(&self.payload);
     }
 
     fn decode<T: Buf>(buf: &mut T) -> QuicResult<Self> {
-        let len = buf.get_u16_be();
-        let mut payload = vec![0u8; len as usize];
+        let flags = buf.get_u8();
+
+        // check for explicit offset
+
+        if flags & 0x04 != 0 {
+            let offset = VarLen::decode(buf)?.0;
+            if offset != 0 {
+                return Err(QuicError::DecodeError("crypto frame with non-zero offset".to_string()));
+            };
+        };
+
+        // check for and validate explicit length
+
+        let rem = buf.remaining() as u64;
+        let (len, consume) = match flags & 0x02 {
+            0 => (None, rem),
+            _ => {
+                let len = VarLen::decode(buf)?.0;
+                if len > rem {
+                    return Err(
+                        QuicError::DecodeError("length too great".to_string())
+                    );
+                }
+                (Some(len), len)
+            }
+        };
+
+        // copy payload into frame
+
+        let mut payload = vec![0u8; consume as usize];
         buf.copy_to_slice(&mut payload);
         Ok(CryptoFrame {len, payload})
     }
