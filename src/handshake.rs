@@ -22,7 +22,7 @@ use snow::NoiseBuilder;
 use snow::params::NoiseParams;
 
 lazy_static! {
-    static ref PARAMS: NoiseParams = "Noise_IK_25519_ChaChaPoly_SHA256".parse().unwrap();
+    static ref PARAMS: NoiseParams = "Noise_IK_25519_AESGCM_SHA256".parse().unwrap();
 }
 
 const STATIC_DUMMY_SECRET : [u8; 32] = [

@@ -5,7 +5,6 @@ use conn_state::ConnectionState;
 use parameters::ClientTransportParameters;
 use streams::Streams;
 use handshake;
-use noise;
 
 use std::net::{SocketAddr, ToSocketAddrs};
 
@@ -18,11 +17,11 @@ pub struct Client {
 }
 
 impl Client {
-    pub fn connect(server: &str, port: u16, server_static: noise::PublicKey) -> QuicResult<ConnectFuture> {
+    pub fn connect(server: &str, port: u16, server_static: [u8; 32]) -> QuicResult<ConnectFuture> {
         ConnectFuture::new(Self::new(server, port, server_static)?)
     }
 
-    pub(crate) fn new(server: &str, port: u16, server_static: noise::PublicKey) -> QuicResult<Client> {
+    pub(crate) fn new(server: &str, port: u16, server_static: [u8; 32]) -> QuicResult<Client> {
         let handshake = handshake::client_session(server_static, None, ClientTransportParameters::default().clone());
         Self::with_state(server, port, ConnectionState::new(handshake, None))
     }

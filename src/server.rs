@@ -13,8 +13,6 @@ use std::collections::{hash_map::Entry, HashMap};
 use std::net::{SocketAddr, ToSocketAddrs};
 use std::sync::Arc;
 
-use noise::SecretKey;
-
 use tokio::{self, net::UdpSocket};
 
 pub struct Server {
@@ -22,11 +20,11 @@ pub struct Server {
     in_buf: Vec<u8>,
     connections: HashMap<ConnectionId, Sender<Vec<u8>>>,
     send_queue: PacketChannel,
-    key: SecretKey,
+    key: [u8; 32],
 }
 
 impl Server {
-    pub fn new(ip: &str, port: u16, key: SecretKey) -> QuicResult<Self> {
+    pub fn new(ip: &str, port: u16, key: [u8; 32]) -> QuicResult<Self> {
         let addr = (ip, port)
             .to_socket_addrs()?
             .next()
