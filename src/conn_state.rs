@@ -236,7 +236,7 @@ where
     }
 
     pub(crate) fn handle(&mut self, buf: &mut [u8]) -> QuicResult<()> {
-        println!("debug : handle packet");
+        println!("debug : handle packet:");
         println!("debug :      buf = {}", hex::encode(&buf));
         let pdecode = PartialDecode::new(buf)?;
         self.handle_partial(pdecode)
@@ -275,7 +275,10 @@ where
                 // implicit confirmation
 
                 match self.state {
-                    State::ConfirmHandshake => self.state = State::Connected,
+                    State::ConfirmHandshake => {
+                        println!("debug :   connection confirmed");
+                        self.state = State::Connected;
+                    }
                     _ => (),
                 }
 
@@ -400,7 +403,7 @@ where
 
         println!("debug : handle handshake message:");
         println!("debug :   length = {}", msg.len());
-        println!("debug :      msg = {:?}", msg);
+        println!("debug :      msg = {}", hex::encode(msg));
 
         let (new_msg, new_secret) = self.handshake.process_handshake_message(msg)?;
 
@@ -408,24 +411,7 @@ where
 
         if let Some(secret) = new_secret {
 
-
             /* TODO
-            let params = match self.tls.get_quic_transport_parameters() {
-                None => {
-                    return Err(QuicError::General(
-                        "no transport parameters received".into(),
-                    ));
-                }
-                Some(bytes) => {
-                    let mut read = Cursor::new(bytes);
-                    if self.side == Side::Client {
-                        ServerTransportParameters::decode(&mut read)?.parameters
-                    } else {
-                        ClientTransportParameters::decode(&mut read)?.parameters
-                    }
-                }
-            };
-
             mem::replace(&mut self.remote.params, params);
             */
 

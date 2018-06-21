@@ -101,21 +101,26 @@ impl Session for ClientSession {
         let session = self.session.as_mut().unwrap();
         let mut payload = vec![0u8; 65535];
         match session.read_message(msg, &mut payload) {
-            Ok(_n)  => {
-                // TODO: parse server transport parameters
+            Ok(n)  => {
+                // parse server transport parameters
 
-                // export transport keys
-
-                println!("debug : client exporting key material from Noise:");
+                self.params_remote = Some({
+                    let mut read = Cursor::new(&payload[..n]);
+                    ServerTransportParameters::decode(&mut read)?
+                });
 
                 assert!(session.is_initiator());
                 assert!(session.is_handshake_finished());
 
+                // export key material
+
                 let (k1, k2) = session.export().unwrap();
                 let secret   = Secret::For1Rtt(&AES_256_GCM, &SHA256, k1.to_vec(), k2.to_vec());
 
-                println!("debug :   i->r : {}", hex::encode(k1));
-                println!("debug :   i<-r : {}", hex::encode(k2));
+                println!("debug :   params_remote = {:?}", &self.params_remote);
+                println!("debug :   exporting key material from Noise:");
+                println!("debug :     i->r : {}", hex::encode(k1));
+                println!("debug :     i<-r : {}", hex::encode(k2));
 
                 Ok((None, Some(secret)))
             },
