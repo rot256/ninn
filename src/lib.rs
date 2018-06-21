@@ -16,7 +16,6 @@ extern crate rustls;
 extern crate tokio;
 extern crate webpki;
 extern crate webpki_roots;
-extern crate x25519_dalek;
 
 pub use client::Client;
 pub use server::Server;
