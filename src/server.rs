@@ -11,7 +11,6 @@ use types::ConnectionId;
 
 use std::collections::{hash_map::Entry, HashMap};
 use std::net::{SocketAddr, ToSocketAddrs};
-use std::sync::Arc;
 
 use tokio::{self, net::UdpSocket};
 

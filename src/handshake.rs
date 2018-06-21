@@ -1,18 +1,14 @@
 use crypto::Secret;
-use parameters::{ClientTransportParameters, ServerTransportParameters};
+use parameters::{ClientTransportParameters, ServerTransportParameters, TransportParameters};
 use types::Side;
-use rand::OsRng;
-use bytes::{Buf, BufMut};
 use super::{QuicError, QuicResult};
-use codec::{BufLen, Codec, VarLen};
-use std::io::Cursor;
+use codec::Codec;
 use std::str;
+use std::io::Cursor;
+
+use super::QUIC_VERSION;
 
 use hex;
-
-use x25519_dalek::generate_secret;
-use x25519_dalek::generate_public;
-use x25519_dalek::diffie_hellman;
 
 use ring::aead::AES_256_GCM;
 use ring::digest::SHA256;
@@ -32,21 +28,34 @@ const STATIC_DUMMY_SECRET : [u8; 32] = [
     0xa4, 0x95, 0x99, 0x1b, 0x78, 0x52, 0xb8, 0x55
 ];
 
-pub struct ClientSession {
-    session    : snow::Session,
-    params     : ClientTransportParameters,
-}
-
-pub struct ServerSession {
-    session    : snow::Session,
-    params     : ServerTransportParameters,
-}
-
 const HANDSHAKE_REQUEST_FIXED_LEN  : usize = 32 + 16 + 32 + 16;
 const HANDSHAKE_RESPONSE_FIXED_LEN : usize = 32 + 16;
 
+pub struct ClientSession {
+    static_key    : [u8; 32],                          // client secret
+    remote_key    : [u8; 32],                          // server public
+    session       : Option<snow::Session>,             // noise snow session
+    params_remote : Option<ServerTransportParameters>, // authenticated remote transport parameters
+    params_local  : ClientTransportParameters,         // transport parameters
+}
+
+pub struct ServerSession {
+    static_key    : [u8; 32],                          // server secret
+    session       : Option<snow::Session>,             // noise snow session
+    params_remote : Option<ClientTransportParameters>, // authenticated remote transport parameters
+    params_local  : ServerTransportParameters,         // transport parameters
+    auth_check    : fn([u8; 32]) -> bool               // application specific auth. check
+}
+
 pub trait Session {
     fn process_handshake_message(&mut self, &[u8]) -> QuicResult<HandshakeResult>;
+    fn set_prologue(&mut self, prologue : &[u8]) -> QuicResult<()>;
+    fn get_transport_parameters(&self) -> Option<TransportParameters>;
+}
+
+fn no_auth(pk : [u8; 32]) -> bool {
+    println!("debug : client identity : {}", hex::encode(&pk));
+    true
 }
 
 pub fn client_session(
@@ -54,14 +63,12 @@ pub fn client_session(
     static_key : Option<[u8; 32]>,
     params     : ClientTransportParameters,
 ) -> ClientSession {
-    let builder    = NoiseBuilder::new(PARAMS.clone());
-    let static_key = static_key.unwrap_or(STATIC_DUMMY_SECRET);
-    ClientSession{
-        session : builder
-            .local_private_key(&static_key)
-            .remote_public_key(&remote_key)
-            .build_initiator().unwrap(),
-        params,
+    ClientSession {
+        static_key: static_key.unwrap_or(STATIC_DUMMY_SECRET),
+        params_remote: None,
+        params_local: params,
+        remote_key,
+        session: None
     }
 }
 
@@ -69,33 +76,42 @@ pub fn server_session(
     static_key : [u8; 32],
     params     : ServerTransportParameters,
 ) -> ServerSession {
-    let builder = NoiseBuilder::new(PARAMS.clone());
     ServerSession {
-        session : builder
-            .local_private_key(&static_key)
-            .build_responder().unwrap(),
-        params,
+        static_key: static_key,
+        params_remote: None,
+        params_local: params,
+        session: None,
+        auth_check: no_auth,
     }
 }
 
 impl Session for ClientSession {
+    fn set_prologue(&mut self, _prologue : &[u8]) -> QuicResult<()> {
+        Err(QuicError::General("setting prologue on client".to_owned()))
+    }
+
+    fn get_transport_parameters(&self) -> Option<TransportParameters> {
+        match &self.params_remote {
+            Some(p) => Some(p.parameters.clone()),
+            None    => None,
+        }
+    }
+
     fn process_handshake_message(&mut self, msg: &[u8]) -> QuicResult<HandshakeResult> {
-
-        // process handshake response
-
+        let session = self.session.as_mut().unwrap();
         let mut payload = vec![0u8; 65535];
-        match self.session.read_message(msg, &mut payload) {
-            Ok(n)  => {
+        match session.read_message(msg, &mut payload) {
+            Ok(_n)  => {
                 // TODO: parse server transport parameters
 
                 // export transport keys
 
                 println!("debug : client exporting key material from Noise:");
 
-                assert!(self.session.is_initiator());
-                assert!(self.session.is_handshake_finished());
+                assert!(session.is_initiator());
+                assert!(session.is_handshake_finished());
 
-                let (k1, k2) = self.session.export().unwrap();
+                let (k1, k2) = session.export().unwrap();
                 let secret   = Secret::For1Rtt(&AES_256_GCM, &SHA256, k1.to_vec(), k2.to_vec());
 
                 println!("debug :   i->r : {}", hex::encode(k1));
@@ -109,54 +125,125 @@ impl Session for ClientSession {
 }
 
 impl ClientSession {
-    pub fn create_handshake_request(&mut self) -> QuicResult<Vec<u8>> {
+    pub fn create_handshake_request(&mut self, prologue : &[u8]) -> QuicResult<Vec<u8>> {
 
+        // sanity check
+
+        if let Some(_) = self.session {
+            panic!("Multiple calls to create_handshake_request");
+        }
+
+        // build Noise session
+
+        self.session = Some({
+            let builder  = NoiseBuilder::new(PARAMS.clone());
+                builder
+                    .prologue(prologue)
+                    .local_private_key(&self.static_key)
+                    .remote_public_key(&self.remote_key)
+                    .build_initiator().unwrap()
+        });
+
+        // serialize parameters
+
+        let session = self.session.as_mut().unwrap();
         let mut payload = Vec::new();
-        self.params.encode(&mut payload);
+        self.params_local.encode(&mut payload);
 
         let mut msg = vec![0u8; 65535];
-        let len = self.session.write_message(&payload, &mut msg).unwrap();
+        let len = session.write_message(&payload, &mut msg).unwrap();
 
         Ok(msg[..len].to_owned())
     }
 }
 
 impl Session for ServerSession {
+    fn set_prologue(&mut self, prologue : &[u8]) -> QuicResult<()> {
+        match self.session {
+            Some(_) =>
+                Err(QuicError::General("setting prologue after processing handshake request".to_owned())),
+            None => {
+                self.session = Some({
+                    let builder  = NoiseBuilder::new(PARAMS.clone());
+                        builder
+                            .local_private_key(&self.static_key)
+                            .prologue(prologue)
+                            .build_responder().unwrap()
+                });
+                Ok(())
+            }
+        }
+    }
+
+    fn get_transport_parameters(&self) -> Option<TransportParameters> {
+        match &self.params_remote {
+            Some(p) => Some(p.parameters.clone()),
+            None    => None,
+        }
+    }
+
     fn process_handshake_message(&mut self, msg: &[u8]) -> QuicResult<HandshakeResult> {
 
-        println!("debug : server : process handshake message");
+        println!("debug : process handshake message");
 
+        let session = self.session.as_mut().unwrap();
         let mut payload = vec![0u8; 65535];
-        match self.session.read_message(msg, &mut payload) {
+        match session.read_message(msg, &mut payload) {
             Ok(n)  => {
 
-                // TODO: parse client transport parameters
+                // parse client transport parameters
 
-                // TODO: validate initial_version
+                let parameters = {
+                    let mut read = Cursor::new(&payload[..n]);
+                    ClientTransportParameters::decode(&mut read)?
+                };
+                self.params_remote = Some(parameters.clone());
+                println!("debug :   client parameters {:?}", &parameters);
 
-                // TODO: check client identity (pass to application)
+                // validate initial_version (this is the only supported version)
 
-                println!("debug : client identity {:?}", self.session.get_remote_static());
+                if parameters.initial_version != QUIC_VERSION {
+                    return Err(
+                        QuicError::General("failed to decrypt noise".to_owned())
+                    );
+                };
+
+                // validate client identity
+
+                let auth_ok = match session.get_remote_static() {
+                    None      => false,
+                    Some(key) => {
+                        let mut pk = [0u8; 32];
+                        pk[..].clone_from_slice(key);
+                        (self.auth_check)(pk)
+                    }
+                };
+
+                if !auth_ok {
+                    return Err(
+                        QuicError::General("client idenity rejected".to_owned())
+                    );
+                }
 
                 // create handshake response
 
                 let resp = {
                     let mut payload = Vec::new();
                     let mut msg = vec![0u8; 65535];
-                    self.params.encode(&mut payload);
-                    let len = self.session.write_message(&payload, &mut msg).unwrap();
-                    assert!(self.session.is_handshake_finished());
+                    self.params_local.encode(&mut payload);
+                    let len = session.write_message(&payload, &mut msg).unwrap();
+                    assert!(session.is_handshake_finished());
                     msg[..len].to_owned()
                 };
 
                 // export transport keys
 
-                println!("debug : server exporting key material from Noise:");
+                println!("debug :   exporting key material from Noise:");
 
-                assert!(!self.session.is_initiator());
-                assert!(self.session.is_handshake_finished());
+                assert!(!session.is_initiator());
+                assert!(session.is_handshake_finished());
 
-                let (k1, k2) = self.session.export().unwrap();
+                let (k1, k2) = session.export().unwrap();
                 let secret   = Secret::For1Rtt(
                     &AES_256_GCM,
                     &SHA256,
@@ -164,8 +251,8 @@ impl Session for ServerSession {
                     k2.to_vec()
                 );
 
-                println!("debug :   i->r : {}", hex::encode(k1));
-                println!("debug :   i<-r : {}", hex::encode(k2));
+                println!("debug :     i->r : {}", hex::encode(k1));
+                println!("debug :     i<-r : {}", hex::encode(k2));
 
                 Ok((Some(resp), Some(secret)))
             },

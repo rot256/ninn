@@ -32,7 +32,6 @@ impl Secret {
     }
 
     pub fn build_key(&self, side: Side) -> PacketKey {
-        println!("debug : build packet key: {:?}", &self);
         match self {
             Secret::Handshake(cid) => {
                 let label = if side == Side::Client {

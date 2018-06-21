@@ -82,7 +82,8 @@ pub struct ConnectFuture {
 
 impl ConnectFuture {
     fn new(mut client: Client) -> QuicResult<ConnectFuture> {
-        client.conn_state.initial()?;
+        let v = "Hello World".as_bytes();
+        client.conn_state.initial(&v)?;
         Ok(ConnectFuture {
             client: Some(client),
         })

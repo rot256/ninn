@@ -13,8 +13,8 @@ use codec::Codec;
 use crypto::Secret;
 use frame::{Ack, AckFrame, CloseFrame, Frame, PaddingFrame, PathFrame, CryptoFrame};
 use packet::{Header, LongType, PartialDecode, ShortType};
-use parameters::{ClientTransportParameters, ServerTransportParameters, TransportParameters};
-use streams::{Dir, Streams};
+use parameters::TransportParameters;
+use streams::Streams;
 use handshake;
 use types::{ConnectionId, Side, GENERATED_CID_LENGTH};
 
@@ -139,7 +139,6 @@ where
         let number = self.src_pn;
         self.src_pn += 1;
 
-        println!("debug : queue packet, src_pn = {}", self.src_pn);
 
         let (ptype, new_state) = match self.state {
             State::Connected => (None, self.state),
@@ -152,6 +151,7 @@ where
             }
             State::ConfirmHandshake => (Some(LongType::Handshake), State::ConfirmHandshake),
         };
+
 
         let header_len = match ptype {
             Some(_) => (12 + (dst_cid.len + src_cid.len) as usize),
@@ -168,6 +168,11 @@ where
             &self.secret
         };
 
+        println!("debug : queue packet");
+        println!("debug :   src_pn = {}", self.src_pn);
+        println!("debug :     type = {:?}", ptype);
+        println!("debug :   secret = {:?}", secret);
+
         let key = secret.build_key(self.side);
         let tag_len = key.algorithm().tag_len();
 
@@ -175,7 +180,8 @@ where
         let payload_len = {
             let mut write = Cursor::new(&mut buf[header_len..self.pmtu - tag_len]);
             while let Some(frame) = self.control.pop_front() {
-                println!("debug :   control frame {:?}", frame);
+                println!("debug :   control frame");
+                println!("debug :     {:?}", frame);
                 frame.encode(&mut write);
             }
             self.streams.poll_send(&mut write);
@@ -231,7 +237,7 @@ where
 
     pub(crate) fn handle(&mut self, buf: &mut [u8]) -> QuicResult<()> {
         println!("debug : handle packet");
-        println!("  buf = {}", hex::encode(&buf));
+        println!("debug :      buf = {}", hex::encode(&buf));
         let pdecode = PartialDecode::new(buf)?;
         self.handle_partial(pdecode)
     }
@@ -245,12 +251,12 @@ where
 
         let key = {
             let secret = &self.secret;
+            println!("debug :      key = {:?}", &secret);
             secret.build_key(self.side.other())
         };
 
-        println!("debug :  state = {:?}", &self.state);
-
-        println!("{:?}", header);
+        println!("debug :    state = {:?}", &self.state);
+        println!("debug :   header = {:?}", header);
 
         let payload = match header {
             Header::Long { number, .. } | Header::Short { number, .. } => {
@@ -326,13 +332,35 @@ where
             )));
         }
 
+        let mut prologue = false;
         let mut send_ack = false;
         for frame in &payload {
             println!("debug : decoded frame:");
             println!("debug :   {:?}", frame);
+            println!("debug :   {:?}", header.ptype());
             match frame {
                 Frame::Crypto(f) => {
-                    self.handle_handshake_message(&f.payload);
+                    match header.ptype() {
+                        Some(LongType::Initial) =>
+                            {
+                                if self.side == Side::Client {
+                                    return Err(QuicError::General(format!(
+                                        "client received initial message"
+                                    )));
+                                };
+
+                                if prologue {
+                                    self.handle_handshake_message(&f.payload)?;
+                                } else {
+                                    println!("debug :   set prologue");
+                                    self.handshake.set_prologue(&f.payload)?;
+                                    prologue = true;
+                                };
+                            }
+                        Some(LongType::Handshake) =>
+                            self.handle_handshake_message(&f.payload)?,
+                        _ => (),
+                    };
                 }
                 Frame::Stream(f) => {
                     assert!(self.state == State::Connected);
@@ -372,6 +400,7 @@ where
 
         println!("debug : handle handshake message:");
         println!("debug :   length = {}", msg.len());
+        println!("debug :      msg = {:?}", msg);
 
         let (new_msg, new_secret) = self.handshake.process_handshake_message(msg)?;
 
@@ -447,14 +476,26 @@ where
 }
 
 impl ConnectionState<handshake::ClientSession> {
-    pub(crate) fn initial(&mut self) -> QuicResult<()> {
+    pub(crate) fn initial(&mut self, prologue : &[u8]) -> QuicResult<()> {
         println!("debug : create initial handshake packet");
-        let msg = self.handshake.create_handshake_request()?;
+
+        let msg = self.handshake.create_handshake_request(prologue)?;
+
+        // push prologue frame
+
+        self.control.push_back(Frame::Crypto(CryptoFrame{
+            len     : Some(prologue.len() as u64),
+            payload : prologue.to_owned(),
+        }));
+
+        // push crypto frame
+
         debug_assert!(msg.len() < (1 << 16));
         self.control.push_back(Frame::Crypto(CryptoFrame{
             len     : Some(msg.len() as u64),
             payload : msg,
         }));
+
         Ok(())
     }
 }
