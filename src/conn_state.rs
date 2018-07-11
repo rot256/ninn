@@ -452,7 +452,8 @@ where
             println!("debug : send handshake message");
             println!("debug :   msg = {} ", hex::encode(&msg));
             self.control.push_back(Frame::Crypto(CryptoFrame {
-                len     : Some(msg.len() as u64),
+                offset  : 0,
+                length  : msg.len() as u64,
                 payload : msg,
             }));
         }
@@ -470,7 +471,8 @@ impl ConnectionState<handshake::ClientSession> {
         // push prologue frame
 
         self.control.push_back(Frame::Crypto(CryptoFrame{
-            len     : Some(prologue.len() as u64),
+            offset  : 0,
+            length  : prologue.len() as u64,
             payload : prologue.to_owned(),
         }));
 
@@ -478,7 +480,8 @@ impl ConnectionState<handshake::ClientSession> {
 
         debug_assert!(msg.len() < (1 << 16));
         self.control.push_back(Frame::Crypto(CryptoFrame{
-            len     : Some(msg.len() as u64),
+            offset  : 0,
+            length  : msg.len() as u64,
             payload : msg,
         }));
 
