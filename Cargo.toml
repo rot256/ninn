@@ -1,15 +1,16 @@
 [package]
-name = "quinn"
+name = "ninn"
 version = "0.1.0"
-authors = ["Dirkjan Ochtman <dirkjan@ochtman.nl>"]
+authors = ["Dirkjan Ochtman <dirkjan@ochtman.nl>", "Mathias Hall-Andersen <mathias@hall-andersen.dk>"]
 description = "Futures-based QUIC implementation"
-keywords = ["quic", "tokio"]
+keywords = ["quic", "tokio", "noise"]
 categories = ["network-programming"]
-homepage = "https://github.com/djc/quinn"
-repository = "https://github.com/djc/quinn"
+homepage = "https://github.com/nccgroup/ninn"
+repository = "https://github.com/nccgroup/ninn"
 license = "MIT/Apache-2.0"
 
 [dependencies]
+x25519-dalek = "0.2.0"
 bytes = "0.4.7"
 failure = "0.1"
 failure_derive = "0.1"
@@ -21,6 +22,7 @@ rand = "=0.5.0-pre.2"
 ring = "0.13.0-alpha"
 webpki = "0.18.0-alpha"
 webpki-roots = "0.14"
+env_logger = "0.5"
 lazy_static = "*"
 
 [dependencies.rustls]
@@ -29,11 +31,18 @@ branch = "jbp-tls13-draft-28"
 features = ["quic"]
 
 [dependencies.snow]
-# git = "https://github.com/rot256/snow"
-# branch = "master"
-path = "../snow"
+git = "https://github.com/rot256/snow"
+branch = "master"
 
 [dev-dependencies]
 env_logger = "0.5"
 untrusted = "0.6"
 hex = "*"
+
+[[bin]]
+name = "client"
+path = "examples/client.rs"
+
+[[bin]]
+name = "server"
+path = "examples/server.rs"

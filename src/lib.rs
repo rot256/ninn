@@ -16,6 +16,7 @@ extern crate rustls;
 extern crate tokio;
 extern crate webpki;
 extern crate webpki_roots;
+extern crate x25519_dalek;
 
 pub use client::Client;
 pub use server::Server;
@@ -23,16 +24,21 @@ pub use server::Server;
 mod client;
 mod codec;
 mod conn_state;
-mod crypto;
 mod frame;
 mod nquic;
+mod dhfuture;
 pub mod http;
 mod packet;
 mod parameters;
 mod server;
+mod protector;
 pub mod streams;
 pub mod handshake;
 mod types;
+
+pub trait ClientAuthenticator: Send + Clone {
+    fn auth(&self, Option<&[u8; 32]>) -> bool;
+}
 
 #[derive(Debug, Fail)]
 pub enum QuicError {

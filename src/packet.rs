@@ -281,13 +281,79 @@ impl ShortType {
     }
 }
 
+pub fn reconstruct_packet_number(
+    curr  : u64, // next expected packet number
+    pn    : u64, // received packet number
+    stype : ShortType
+) -> u64 {
+    let mask = match stype {
+        ShortType::One  => 0xffff_ffff_ffff_ff00,
+        ShortType::Two  => 0xffff_ffff_ffff_0000,
+        ShortType::Four => 0xffff_ffff_0000_0000,
+    };
+
+    let off = !mask + 1;
+    let new = (curr & mask) | pn;
+
+    debug_assert!(pn < off);
+    debug_assert!(curr <= new + off);
+    debug_assert!(curr >= new - off);
+
+    // pick closes
+
+    if curr < new {
+        let d1 = new - curr;
+        let d2 = curr - (new - off);
+        if d1 < d2 { new } else { new - off }
+    } else {
+        let d1 = curr - new;
+        let d2 = (new + off) - curr;
+        if d1 < d2 { new } else { new + off }
+    }
+}
 
 #[cfg(test)]
 mod tests {
     use hex;
     use codec::Codec;
-    use types::ConnectionId;
     use std::io::Cursor;
+    use types::ConnectionId;
+    use packet::{ShortType, reconstruct_packet_number};
+
+    #[test]
+    fn test_packet_number_decode() {
+
+        let tests = vec![
+            ((0x0000_0000_aa82_f30f,
+              0x0000_0010,
+              ShortType::One),
+              0x0000_0000_aa82_f310),
+            ((0x0000_0000_aa82_f30f,
+              0x0000_1f94,
+              ShortType::Two),
+              0x0000_0000_aa83_1f94),
+            ((0x1234_5678_0000_0000,
+              0xffff_ffff,
+              ShortType::Four),
+              0x1234_5677_ffff_ffff),
+            ((0x1234_5678_0000_0000,
+              0x8000_0000,
+              ShortType::Four),
+              0x1234_5677_8000_0000),
+            ((0x1234_5678_0000_0000,
+              0x7fff_ffff,
+              ShortType::Four),
+              0x1234_5678_7fff_ffff),
+        ];
+
+        for (inputs, output) in tests {
+            let (next, pn, stype) = inputs;
+            assert_eq!(
+                reconstruct_packet_number(next, pn, stype),
+                output
+            );
+        }
+    }
 
     #[test]
     fn test_short_roundtrip() {

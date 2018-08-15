@@ -47,13 +47,22 @@ impl Streams {
     }
 
     pub fn poll_send<T: BufMut>(&mut self, payload: &mut T) {
+
+        // prioritize control messages
+
         let mut me = self.inner.lock().unwrap();
         while let Some(frame) = me.control.pop_front() {
             frame.encode(payload);
         }
 
+        debug!("construct stream frames");
+
         while let Some((id, start, mut end)) = me.send_queue.pop_front() {
+
+            // check insufficient space for frame
+
             if payload.remaining_mut() < 16 {
+                debug!("  -- out of space --");
                 me.send_queue.push_front((id, start, end));
                 break;
             }
@@ -65,6 +74,13 @@ impl Streams {
                 len: Some((end - start) as u64),
                 data: Vec::new(),
             };
+
+            debug!("  frame:");
+            debug!("    id     = {}", id);
+            debug!("    offset = {}", start);
+            debug!("    length = {}", end - start);
+
+            // consume as much data as possible
 
             let len = end - start;
             if len > payload.remaining_mut() {
@@ -95,7 +111,6 @@ impl Streams {
             frame.encode(payload);
         }
 
-        println!("debug : streams poll_send");
     }
 
     pub fn get_stream(&self, id: u64) -> Option<StreamRef> {
@@ -138,6 +153,7 @@ impl Streams {
     }
 
     pub fn update_max_id(&mut self, id: u64) {
+        debug!("update_max_id = {}", id);
         let mut me = self.inner.lock().unwrap();
         me.open[(id % 4) as usize].max = id;
     }
@@ -188,7 +204,7 @@ impl Streams {
         Ok(())
     }
 
-    pub fn request_stream(self, id: u64) -> Box<Future<Item = Streams, Error = QuicError>> {
+    pub fn request_stream(self, id: u64) -> Box<Future<Item = Streams, Error = QuicError> + Send> {
         let consumer = {
             let mut me = self.inner.lock().unwrap();
             let consumer = {

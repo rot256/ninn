@@ -10,63 +10,51 @@ use hex;
 
 use super::{QuicError, QuicResult, QUIC_VERSION};
 use codec::Codec;
-use crypto::Secret;
 use frame::{Ack, AckFrame, CloseFrame, Frame, PaddingFrame, PathFrame, CryptoFrame};
-use packet::{Header, LongType, PartialDecode, ShortType};
+use packet::{Header, LongType, PartialDecode, ShortType, reconstruct_packet_number};
 use parameters::TransportParameters;
 use streams::Streams;
 use handshake;
 use types::{ConnectionId, Side, GENERATED_CID_LENGTH};
+
+use protector::{Protector, ProtectorHandshake, Protector1RTT, Secret};
+
+const TAG_SIZE : usize = 16;
 
 pub struct ConnectionState<T> {
     side: Side,
     state: State,
     local: PeerData,
     remote: PeerData,
-    dst_pn: u32,
-    src_pn: u32,
-    secret: Secret,
-    prev_secret: Option<Secret>,
+    dst_pn: u64,
+    src_pn: u64,
+
+    protector: Box<Protector + Send>,
+    protector_old: Option<Box<Protector + Send>>,
+
     pub streams: Streams,
     queue: VecDeque<Vec<u8>>,
     control: VecDeque<Frame>,
     handshake: T,
     pmtu: usize,
-}
 
-fn recover_packet_number(current : u32, pn : u32, t : ShortType) -> u32 {
-    let mask = match t {
-        ShortType::One  => 0xffff_ff00,
-        ShortType::Two  => 0xffff_0000,
-        ShortType::Four => 0x0000_0000,
-    };
+    protector_msg: Option<Vec<u8>>,
 
-    let new = (current & mask) | pn;
-    let off = (mask & 0xffff_ffff) + 1;
-    return if new < current {
-        new + off
-    } else {
-        new
-    }
+    // crypto
+
+    crypto_offset: u64
 }
 
 impl<T> ConnectionState<T>
 where
     T: handshake::Session + handshake::QuicSide,
 {
-    pub fn new(handshake: T, secret: Option<Secret>) -> Self {
+    pub fn new(handshake: T, client_conn_id: Option<ConnectionId>) -> Self {
         let mut rng = thread_rng();
         let dst_cid = rng.gen();
         let side    = handshake.side();
 
-        let secret = if side == Side::Client {
-            debug_assert!(secret.is_none());
-            Secret::Handshake(dst_cid)
-        } else if let Some(secret) = secret {
-            secret
-        } else {
-            panic!("need secret for client conn_state");
-        };
+        debug!("side           = {:?}", side);
 
         let local = PeerData::new(rng.gen());
         let (num_recv_bidi, num_recv_uni) = (
@@ -79,9 +67,22 @@ where
             (4 * num_recv_bidi, 1 + 4 * num_recv_uni)
         };
 
+        let hshake = match side {
+            Side::Client => dst_cid,
+            Side::Server => {
+                if let Some(id) = client_conn_id {
+                    id
+                } else {
+                    panic!("client connection id required for server instance");
+                }
+            }
+        };
+
         let mut streams = Streams::new(side);
         streams.update_max_id(max_recv_bidi);
         streams.update_max_id(max_recv_uni);
+
+        let src_pn : u64 = rng.gen();
 
         ConnectionState {
             handshake,
@@ -89,13 +90,15 @@ where
             state: State::Start,
             remote: PeerData::new(dst_cid),
             local,
-            src_pn: rng.gen(),
+            src_pn: src_pn & 0x0000_0000_ffff_ffff,
             dst_pn: 0,
-            secret,
-            prev_secret: None,
+            crypto_offset: 0,
+            protector: Box::new(ProtectorHandshake::new(hshake, side)),
+            protector_old: None,
             streams,
             queue: VecDeque::new(),
             control: VecDeque::new(),
+            protector_msg: None,
             pmtu: IPV6_MIN_MTU,
         }
     }
@@ -103,12 +106,31 @@ where
     pub fn is_handshaking(&self) -> bool {
         match self.state {
             State::Connected => false,
-            _ => true,
+            _                => true,
         }
     }
 
     pub fn queued(&mut self) -> QuicResult<Option<&Vec<u8>>> {
+
+        // attempt to upgrade protection key
+
+        if !self.is_handshaking() && self.protector_msg == None {
+            self.protector_msg = self.protector.get_crypto_frame();
+        }
+
+        // coalesce frames into the packet
+
+        debug!("handshaking: {}", self.is_handshaking());
+
         self.queue_packet()?;
+
+        // protector messages guaranteed to be sent
+
+        self.protector_msg = None;
+        self.protector.evolve();
+
+        // return next packet
+
         Ok(self.queue.front())
     }
 
@@ -126,9 +148,13 @@ where
         self.local.cid
     }
 
-    pub(crate) fn set_secret(&mut self, secret: Secret) {
-        let old = mem::replace(&mut self.secret, secret);
-        self.prev_secret = Some(old);
+    pub(crate) fn set_rtt1_key(&mut self, secret: Secret) {
+        debug!("installing RTT-1 protector");
+        let old = mem::replace(
+            &mut self.protector,
+            Box::new(Protector1RTT::new(secret, self.side))
+        );
+        self.protector_old = Some(old);
     }
 
     #[cfg_attr(feature = "cargo-clippy", allow(needless_pass_by_value))]
@@ -136,9 +162,10 @@ where
 
         let (dst_cid, src_cid) = (self.remote.cid, self.local.cid);
         debug_assert_eq!(src_cid.len, GENERATED_CID_LENGTH);
-        let number = self.src_pn;
-        self.src_pn += 1;
 
+        let number = self.src_pn;
+
+        // update state
 
         let (ptype, new_state) = match self.state {
             State::Connected => (None, self.state),
@@ -152,42 +179,58 @@ where
             State::ConfirmHandshake => (Some(LongType::Handshake), State::ConfirmHandshake),
         };
 
+        // select protector
+
+        let ref protector = if let Some(LongType::Handshake) = ptype {
+            if let Some(ref p) = self.protector_old {
+                p
+            } else {
+                &self.protector
+            }
+        } else {
+            &self.protector
+        };
+
+        // encode frames into buffer
+
+        let mut buf = vec![0u8; self.pmtu];
 
         let header_len = match ptype {
             Some(_) => (12 + (dst_cid.len + src_cid.len) as usize),
             None => (3 + dst_cid.len as usize),
         };
 
-        let secret = if let Some(LongType::Handshake) = ptype {
-            if let Some(ref secret @ Secret::Handshake(_)) = self.prev_secret {
-                secret
-            } else {
-                &self.secret
-            }
-        } else {
-            &self.secret
-        };
-
-        println!("debug : queue packet");
-        println!("debug :   src_pn = {}", self.src_pn);
-        println!("debug :     type = {:?}", ptype);
-        println!("debug :   secret = {:?}", secret);
-
-        let key = secret.build_key(self.side);
-        let tag_len = key.algorithm().tag_len();
-
-        let mut buf = vec![0u8; self.pmtu];
         let payload_len = {
-            let mut write = Cursor::new(&mut buf[header_len..self.pmtu - tag_len]);
+
+            let mut write = Cursor::new(
+                &mut buf[header_len..self.pmtu - TAG_SIZE]
+            );
+
+            // 0. Future secrecy messages
+
+            if let Some(ref msg) = self.protector_msg {
+                debug!("encode future secrecy frame {:?}", msg);
+                Frame::Crypto(CryptoFrame {
+                    offset  : self.crypto_offset,
+                    length  : msg.len() as u64,
+                    payload : msg.to_vec(),
+                }).encode(&mut write);
+                self.crypto_offset += msg.len() as u64;
+            }
+
+            // 1. control messages
+
             while let Some(frame) = self.control.pop_front() {
-                println!("debug :   control frame");
-                println!("debug :     {:?}", frame);
+                debug!("encode control frame {:?}", frame);
                 frame.encode(&mut write);
             }
+
+            // 2. stream / application data
+
             self.streams.poll_send(&mut write);
 
             let mut payload_len = write.position() as usize;
-            let initial_min_size = 1200 - header_len - tag_len;
+            let initial_min_size = 1200 - header_len - TAG_SIZE;
             if ptype == Some(LongType::Initial) && payload_len < initial_min_size {
                 Frame::Padding(PaddingFrame(initial_min_size - payload_len)).encode(&mut write);
                 payload_len = initial_min_size;
@@ -199,45 +242,61 @@ where
             return Ok(());
         }
 
+        debug!("queue packet");
+        debug!("     src_pn = {}", self.src_pn);
+        debug!("       type = {:?}", ptype);
+        debug!("  protector = {:?}", protector);
+
+        // add header to buffer
+
         let header = match ptype {
             Some(ltype) => Header::Long {
                 ptype: ltype,
                 version: QUIC_VERSION,
                 dst_cid,
                 src_cid,
-                len: (payload_len + tag_len) as u64,
-                number,
+                len: (payload_len + TAG_SIZE) as u64,
+                number: (number as u32),
             },
             None => Header::Short {
-                key_phase: false,
+                key_phase: protector.key_phase(),
                 ptype: ShortType::Two,
                 dst_cid,
-                number,
+                number: (number as u32),
             },
         };
-
-        println!("{:?}", header);
 
         {
             let mut write = Cursor::new(&mut buf[..header_len]);
             header.encode(&mut write);
         }
 
+        // encrypt and authenticate packet
+
         let out_len = {
             let (header_buf, mut payload) = buf.split_at_mut(header_len);
-            let mut in_out = &mut payload[..payload_len + tag_len];
-            key.encrypt(number, &header_buf, in_out, tag_len)?
+            let mut in_out = &mut payload[..payload_len + TAG_SIZE];
+            protector.encrypt(
+                number,
+                &header_buf,
+                in_out,
+                TAG_SIZE,
+            )?
         };
 
         buf.truncate(header_len + out_len);
+
+        debug!("      send = {}", hex::encode(&buf));
+
         self.queue.push_back(buf);
         self.state = new_state;
+        self.src_pn += 1;
         Ok(())
     }
 
     pub(crate) fn handle(&mut self, buf: &mut [u8]) -> QuicResult<()> {
-        println!("debug : handle packet:");
-        println!("debug :      buf = {}", hex::encode(&buf));
+        debug!("handle packet:");
+        debug!("     buf = {}", hex::encode(&buf));
         let pdecode = PartialDecode::new(buf)?;
         self.handle_partial(pdecode)
     }
@@ -249,26 +308,34 @@ where
             buf,
         } = partial;
 
-        let key = {
-            let secret = &self.secret;
-            println!("debug :      key = {:?}", &secret);
-            secret.build_key(self.side.other())
-        };
-
-        println!("debug :    state = {:?}", &self.state);
-        println!("debug :   header = {:?}", header);
 
         let payload = match header {
             Header::Long { number, .. } | Header::Short { number, .. } => {
                 let (header_buf, payload_buf) = buf.split_at_mut(header_len);
 
+                let number = number as u64;
                 let number = match header {
                     Header::Short { ptype, .. } =>
-                        recover_packet_number(self.dst_pn, number, ptype),
+                        reconstruct_packet_number(self.dst_pn + 1, number, ptype),
                     _ => number,
                 };
 
-                let decrypted = key.decrypt(number, &header_buf, payload_buf)?;
+                let key_phase = match header {
+                    Header::Short{ key_phase, .. } => key_phase,
+                    _                              => false
+                };
+
+                debug!("     number = {}", number);
+                debug!("      state = {:?}", &self.state);
+                debug!("     header = {:?}", header);
+                debug!("  key_phase = {}", key_phase);
+
+                let decrypted = self.protector.decrypt(
+                    number,
+                    &header_buf,
+                    payload_buf,
+                    key_phase
+                )?;
 
                 self.dst_pn = number;
 
@@ -276,8 +343,9 @@ where
 
                 match self.state {
                     State::ConfirmHandshake => {
-                        println!("debug :   connection confirmed");
+                        debug!("  connection confirmed");
                         self.state = State::Connected;
+                        self.crypto_offset = 0;
                     }
                     _ => (),
                 }
@@ -338,9 +406,9 @@ where
         let mut prologue = false;
         let mut send_ack = false;
         for frame in &payload {
-            println!("debug : decoded frame:");
-            println!("debug :   {:?}", frame);
-            println!("debug :   {:?}", header.ptype());
+            debug!("decoded frame:");
+            debug!("  {:?}", frame);
+            debug!("  {:?}", header.ptype());
             match frame {
                 Frame::Crypto(f) => {
                     match header.ptype() {
@@ -355,33 +423,54 @@ where
                                 if prologue {
                                     self.handle_handshake_message(&f.payload)?;
                                 } else {
-                                    println!("debug :   set prologue");
+                                    debug!("  set prologue");
                                     self.handshake.set_prologue(&f.payload)?;
                                     prologue = true;
                                 };
+                            },
+                        Some(LongType::Handshake) => {
+                            if self.side == Side::Server {
+                                return Err(QuicError::General(format!(
+                                     "client received initial message"
+                                 )));
+                            };
+                            self.handle_handshake_message(&f.payload)?
+                        },
+                        _ => {
+                            if self.is_handshaking() {
+                                debug!("error, received non-handshake crypto frame during handshake");
+                            } else {
+                                debug!("received future secrecy message {:?}", &f.payload);
+                                self.protector.put_crypto_frame(&f.payload);
+                                if self.protector_msg == None {
+                                    self.protector.evolve();
+                                }
                             }
-                        Some(LongType::Handshake) =>
-                            self.handle_handshake_message(&f.payload)?,
-                        _ => (),
+                        },
                     };
                 }
                 Frame::Stream(f) => {
+                    assert!(!prologue);
                     assert!(self.state == State::Connected);
                     send_ack = true;
                     self.streams.received(f)?;
                 }
                 Frame::PathChallenge(PathFrame(token)) => {
+                    assert!(!prologue);
                     send_ack = true;
                     self.control
                         .push_back(Frame::PathResponse(PathFrame(*token)));
                 }
                 Frame::ApplicationClose(CloseFrame { code, reason }) => {
+                    assert!(!prologue);
                     return Err(QuicError::ApplicationClose(*code, reason.clone()));
                 }
                 Frame::ConnectionClose(CloseFrame { code, reason }) => {
+                    assert!(!prologue);
                     return Err(QuicError::ConnectionClose(*code, reason.clone()));
                 }
                 Frame::PathResponse(_) | Frame::Ping | Frame::StreamIdBlocked(_) => {
+                    assert!(!prologue);
                     send_ack = true;
                 }
                 Frame::Ack(_) | Frame::Padding(_) => {}
@@ -401,11 +490,11 @@ where
 
     fn handle_handshake_message(&mut self, msg : &[u8]) -> QuicResult<()> {
 
-        println!("debug : handle handshake message:");
-        println!("debug :   length = {}", msg.len());
-        println!("debug :      msg = {}", hex::encode(msg));
+        debug!("handle handshake message:");
+        debug!("  length = {}", msg.len());
+        debug!("     msg = {}", hex::encode(msg));
 
-        let (new_msg, new_secret) = self.handshake.process_handshake_message(msg)?;
+        let (new_msg, new_secret) = self.handshake.process_message(msg)?;
 
         // process new key material
 
@@ -430,7 +519,7 @@ where
 
             // update secret
 
-            self.set_secret(secret);
+            self.set_rtt1_key(secret);
 
             // update state
 
@@ -449,13 +538,15 @@ where
 
         if let Some(msg) = new_msg {
             assert!(self.is_handshaking());
-            println!("debug : send handshake message");
-            println!("debug :   msg = {} ", hex::encode(&msg));
+            debug!("send handshake message");
+            debug!("  msg = {} ", hex::encode(&msg));
+            let length = msg.len() as u64;
             self.control.push_back(Frame::Crypto(CryptoFrame {
-                offset  : 0,
-                length  : msg.len() as u64,
+                offset  : self.crypto_offset,
+                length  : length,
                 payload : msg,
             }));
+            self.crypto_offset += length;
         }
 
         Ok(())
@@ -464,26 +555,34 @@ where
 
 impl ConnectionState<handshake::ClientSession> {
     pub(crate) fn initial(&mut self, prologue : &[u8]) -> QuicResult<()> {
-        println!("debug : create initial handshake packet");
+        debug!("create initial handshake packet");
 
         let msg = self.handshake.create_handshake_request(prologue)?;
 
         // push prologue frame
 
-        self.control.push_back(Frame::Crypto(CryptoFrame{
-            offset  : 0,
-            length  : prologue.len() as u64,
-            payload : prologue.to_owned(),
-        }));
+        {
+            let length = prologue.len() as u64;
+            self.control.push_back(Frame::Crypto(CryptoFrame{
+                offset  : self.crypto_offset,
+                length  : length,
+                payload : prologue.to_owned(),
+            }));
+            self.crypto_offset += length;
+        }
 
         // push crypto frame
 
-        debug_assert!(msg.len() < (1 << 16));
-        self.control.push_back(Frame::Crypto(CryptoFrame{
-            offset  : 0,
-            length  : msg.len() as u64,
-            payload : msg,
-        }));
+        {
+            let length = prologue.len() as u64;
+            debug_assert!(length < (1 << 16));
+            self.control.push_back(Frame::Crypto(CryptoFrame{
+                offset  : self.crypto_offset,
+                length  : msg.len() as u64,
+                payload : msg,
+            }));
+            self.crypto_offset += length;
+        }
 
         Ok(())
     }
