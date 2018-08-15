@@ -209,17 +209,12 @@ impl Codec for CryptoFrame {
      *  has_offset : The offset should always be zero, hence can be omitted entirely
      */
     fn encode<T: BufMut>(&self, buf: &mut T) {
-        buf.put_u8(CRYPTO_FRAME_ID);
         VarLen(self.offset).encode(buf);
         VarLen(self.length).encode(buf);
         buf.put_slice(&self.payload);
     }
 
     fn decode<T: Buf>(buf: &mut T) -> QuicResult<Self> {
-        if buf.get_u8() != CRYPTO_FRAME_ID {
-            return Err(QuicError::DecodeError("invalid frame id".to_string()));
-        }
-
         let offset = VarLen::decode(buf)?.0;
         let length = VarLen::decode(buf)?.0;
 
