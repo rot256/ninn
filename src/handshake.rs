@@ -28,9 +28,6 @@ const STATIC_DUMMY_SECRET : [u8; 32] = [
     0xa4, 0x95, 0x99, 0x1b, 0x78, 0x52, 0xb8, 0x55
 ];
 
-const HANDSHAKE_REQUEST_FIXED_LEN  : usize = 32 + 16 + 32 + 16;
-const HANDSHAKE_RESPONSE_FIXED_LEN : usize = 32 + 16;
-
 pub struct ClientSession {
     static_key    : [u8; 32],                          // client secret
     remote_key    : [u8; 32],                          // server public

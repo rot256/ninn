@@ -17,12 +17,15 @@ pub struct Client {
 }
 
 impl Client {
-    pub fn connect(server: &str, port: u16, server_static: [u8; 32]) -> QuicResult<ConnectFuture> {
-        ConnectFuture::new(Self::new(server, port, server_static)?)
+    pub fn connect(server: &str, port: u16, server_static: [u8; 32], client_static: Option<[u8; 32]>) -> QuicResult<ConnectFuture> {
+        ConnectFuture::new(Self::new(server, port, server_static, client_static)?)
     }
 
-    pub(crate) fn new(server: &str, port: u16, server_static: [u8; 32]) -> QuicResult<Client> {
-        let handshake = handshake::client_session(server_static, None, ClientTransportParameters::default().clone());
+    pub(crate) fn new(server: &str, port: u16, server_static: [u8; 32], client_static: Option<[u8; 32]>) -> QuicResult<Client> {
+        let handshake = handshake::client_session(
+            server_static,
+            client_static,
+            ClientTransportParameters::default().clone());
         Self::with_state(server, port, ConnectionState::new(handshake, None))
     }
 
@@ -70,7 +73,13 @@ impl Future for Client {
                 e @ Err(_) => try_ready!(e),
             }
             let len = try_ready!(self.socket.poll_recv(&mut self.buf));
-            self.conn_state.handle(&mut self.buf[..len])?;
+            match self.conn_state.handle(&mut self.buf[..len]) {
+                Ok(_)  => (),
+                Err(err) => {
+                    debug!("error, failed to handle message {:?}", err);
+                    ()
+                }
+            }
         }
     }
 }
