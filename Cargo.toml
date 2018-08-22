@@ -1,12 +1,11 @@
 [package]
-name = "quinn"
+name = "ninn"
 version = "0.1.0"
-authors = ["Dirkjan Ochtman <dirkjan@ochtman.nl>"]
-description = "Futures-based QUIC implementation"
+authors = ["Mathias Hall-Andersen <mathias@hall-andersen.dk>", "Dirkjan Ochtman <dirkjan@ochtman.nl>"]
+description = "Futures-based nQUIC implementation"
 keywords = ["quic", "tokio"]
 categories = ["network-programming"]
-homepage = "https://github.com/djc/quinn"
-repository = "https://github.com/djc/quinn"
+repository = "https://github.com/rot256/ninn"
 license = "MIT/Apache-2.0"
 
 [dependencies]
@@ -29,9 +28,8 @@ branch = "jbp-tls13-draft-28"
 features = ["quic"]
 
 [dependencies.snow]
-# git = "https://github.com/rot256/snow"
-# branch = "master"
-path = "../snow"
+git = "https://github.com/rot256/snow"
+branch = "master"
 
 [dev-dependencies]
 env_logger = "0.5"
