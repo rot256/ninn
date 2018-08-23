@@ -7,8 +7,10 @@ use streams::Streams;
 use handshake;
 
 use std::net::{SocketAddr, ToSocketAddrs};
-
+use std::time::Duration;
 use tokio::net::UdpSocket;
+use tokio::prelude::future::Select2;
+use tokio_core::reactor;
 
 pub struct Client {
     conn_state: ConnectionState<handshake::ClientSession>,
@@ -17,8 +19,21 @@ pub struct Client {
 }
 
 impl Client {
-    pub fn connect(server: &str, port: u16, server_static: [u8; 32], client_static: Option<[u8; 32]>) -> QuicResult<ConnectFuture> {
-        ConnectFuture::new(Self::new(server, port, server_static, client_static)?)
+    pub fn connect(server: &str, port: u16, server_static: [u8; 32], client_static: Option<[u8; 32]>) -> QuicResult<Select2<ConnectFuture, reactor::Timeout>>
+    {
+
+        let conn_future = ConnectFuture::new(Self::new(server, port, server_static, client_static)?)?;
+
+        // combine with timeout future
+
+        let core = reactor::Core::new().unwrap();
+        let handle = core.handle();
+
+        Ok(conn_future.select2(
+            reactor::Timeout::new(
+                Duration::from_millis(1000), &handle
+            ).unwrap()
+        ))
     }
 
     pub(crate) fn new(server: &str, port: u16, server_static: [u8; 32], client_static: Option<[u8; 32]>) -> QuicResult<Client> {
@@ -91,8 +106,6 @@ pub struct ConnectFuture {
 
 impl ConnectFuture {
     fn new(mut client: Client) -> QuicResult<ConnectFuture> {
-        let v = "Hello World".as_bytes();
-        client.conn_state.initial(&v)?;
         Ok(ConnectFuture {
             client: Some(client),
         })

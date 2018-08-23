@@ -14,6 +14,7 @@ extern crate ring;
 extern crate snow;
 extern crate rustls;
 extern crate tokio;
+extern crate tokio_core;
 extern crate webpki;
 extern crate webpki_roots;
 
