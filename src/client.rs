@@ -20,24 +20,11 @@ pub struct Client {
 
 impl Client {
     pub fn connect(server: &str, port: u16, server_static: [u8; 32], client_static: Option<[u8; 32]>)
-        -> QuicResult<Future<Item = (Client, Streams), Error = QuicError>>
+        -> QuicResult<ConnectFuture>
     {
-
-        let conn = ConnectFuture::new(
+        ConnectFuture::new(
             Self::new(server, port, server_static, client_static)?
-        )?;
-
-        // combine with timeout future
-
-        let core = reactor::Core::new().unwrap();
-        let handle = core.handle();
-        let timeout = reactor::Timeout::new(
-           Duration::from_millis(1000), &handle
-        ).unwrap().then(|_| {
-            Err(QuicError::Timeout)
-        });
-
-        Ok(conn.select(timeout))
+        )
     }
 
     pub(crate) fn new(server: &str, port: u16, server_static: [u8; 32], client_static: Option<[u8; 32]>) -> QuicResult<Client> {
@@ -105,13 +92,19 @@ impl Future for Client {
 
 #[must_use = "futures do nothing unless polled"]
 pub struct ConnectFuture {
-    client : Option<Client>,
+    client  : Option<Client>,
+    timeout : reactor::Timeout,
 }
 
 impl ConnectFuture {
     fn new(mut client: Client) -> QuicResult<ConnectFuture> {
+        let core   = reactor::Core::new().unwrap();
+        let handle = core.handle();
         Ok(ConnectFuture {
-            client : Some(client),
+            client  : Some(client),
+            timeout : reactor::Timeout::new(
+                Duration::from_millis(1000), &handle
+            ).unwrap(),
         })
     }
 }
@@ -120,6 +113,17 @@ impl Future for ConnectFuture {
     type Item = (Client, Streams);
     type Error = QuicError;
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
+
+        // poll timeout
+
+        match self.timeout.poll() {
+            Err(_) => return Err(QuicError::Timeout),
+            Ok(Async::Ready(_)) => return Err(QuicError::Timeout),
+            _ => (),
+        };
+
+        // poll for connection progression
+
         let done = if let Some(ref mut client) = self.client {
             match client.poll() {
                 Err(e) => {
