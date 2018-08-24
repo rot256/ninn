@@ -19,7 +19,7 @@ pub struct Client {
 }
 
 impl Client {
-    pub fn connect(server: &str, port: u16, server_static: [u8; 32], client_static: Option<[u8; 32]>) -> QuicResult<Select2<ConnectFuture, reactor::Timeout>>
+    pub fn connect(server: &str, port: u16, server_static: [u8; 32], client_static: Option<[u8; 32]>) -> QuicResult<Select2<reactor::Timeout, ConnectFuture>>
     {
 
         let conn_future = ConnectFuture::new(Self::new(server, port, server_static, client_static)?)?;
@@ -29,11 +29,9 @@ impl Client {
         let core = reactor::Core::new().unwrap();
         let handle = core.handle();
 
-        Ok(conn_future.select2(
-            reactor::Timeout::new(
-                Duration::from_millis(1000), &handle
-            ).unwrap()
-        ))
+        Ok(reactor::Timeout::new(
+           Duration::from_millis(1000), &handle
+        ).unwrap().select2(conn_future))
     }
 
     pub(crate) fn new(server: &str, port: u16, server_static: [u8; 32], client_static: Option<[u8; 32]>) -> QuicResult<Client> {
