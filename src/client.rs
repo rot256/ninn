@@ -6,9 +6,13 @@ use parameters::ClientTransportParameters;
 use streams::Streams;
 use handshake;
 
+use std::time::Duration;
 use std::net::{SocketAddr, ToSocketAddrs};
 
 use tokio::net::UdpSocket;
+use tokio::prelude::future::Select;
+
+use tokio_core::reactor;
 
 pub struct Client {
     conn_state: ConnectionState<handshake::ClientSession>,
@@ -86,15 +90,19 @@ impl Future for Client {
 
 #[must_use = "futures do nothing unless polled"]
 pub struct ConnectFuture {
-    client: Option<Client>,
+    client  : Option<Client>,
+    timeout : reactor::Timeout,
 }
 
 impl ConnectFuture {
     fn new(mut client: Client) -> QuicResult<ConnectFuture> {
-        let v = "Hello World".as_bytes();
-        client.conn_state.initial(&v)?;
+        let core   = reactor::Core::new().unwrap();
+        let handle = core.handle();
         Ok(ConnectFuture {
             client: Some(client),
+            timeout: reactor::Timeout::new(
+                Duration::from_millis(1000), &handle
+            ).unwrap()
         })
     }
 }
@@ -103,6 +111,17 @@ impl Future for ConnectFuture {
     type Item = (Client, Streams);
     type Error = QuicError;
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
+
+        // poll timeout
+
+        match self.timeout.poll() {
+            Err(_) => return Err(QuicError::Timeout),
+            Ok(Async::Ready(_)) => return Err(QuicError::Timeout),
+            _ => (),
+        };
+
+        // poll for connection progression
+
         let done = if let Some(ref mut client) = self.client {
             match client.poll() {
                 Err(e) => {

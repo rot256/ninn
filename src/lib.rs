@@ -17,6 +17,7 @@ extern crate tokio;
 extern crate webpki;
 extern crate webpki_roots;
 extern crate x25519_dalek;
+extern crate tokio_core;
 
 pub use client::Client;
 pub use server::Server;
@@ -63,6 +64,8 @@ pub enum QuicError {
     Tls(#[cause] rustls::TLSError),
     #[fail(display = "{}", _0)]
     DecodeError(String),
+    #[fail(display = "")]
+    Timeout,
 }
 
 impl From<std::io::Error> for QuicError {
