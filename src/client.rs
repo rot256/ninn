@@ -101,7 +101,7 @@ impl ConnectFuture {
         Ok(ConnectFuture {
             client: Some(client),
             timeout: reactor::Timeout::new(
-                Duration::from_millis(1000), &handle
+                Duration::from_millis(5000), &handle
             ).unwrap()
         })
     }
