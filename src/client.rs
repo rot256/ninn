@@ -115,7 +115,7 @@ impl Future for ConnectFuture {
         // poll timeout
 
         match self.timeout.poll() {
-            Err(_) => return Err(QuicError::Timeout),
+            Err(e)              => return Err(QuicError::Io(e)),
             Ok(Async::Ready(_)) => return Err(QuicError::Timeout),
             _ => (),
         };
