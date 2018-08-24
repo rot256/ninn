@@ -32,7 +32,7 @@ features = ["quic"]
 
 [dependencies.snow]
 git = "https://github.com/rot256/snow"
-branch = "export-ck"
+branch = "master"
 
 [dev-dependencies]
 env_logger = "0.5"

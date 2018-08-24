@@ -26,7 +26,6 @@ mod codec;
 mod conn_state;
 mod frame;
 mod nquic;
-mod dhfuture;
 pub mod http;
 mod packet;
 mod parameters;

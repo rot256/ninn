@@ -5,7 +5,6 @@ use types::{Side, ConnectionId};
 use super::{QuicResult, QuicError};
 
 use hex;
-use dhfuture;
 use std::fmt;
 use std::fmt::{Debug};
 
@@ -123,7 +122,6 @@ pub struct Protector1RTT {
     send     : ProtectorKey,         // current sending key
     recv     : ProtectorKey,         // current receiving key
     recv_old : Option<ProtectorKey>, // old receiving key
-    dh       : dhfuture::Machine,    // diffie-dellman state machine
 }
 
 fn chain(state : &[u8; 32], ikm : &[u8; 32]) -> ([u8; 32], [u8; 32], [u8; 32]) {
@@ -174,7 +172,6 @@ impl Protector1RTT {
             send     : ProtectorKey::new(send),
             recv     : ProtectorKey::new(recv),
             recv_old : None,
-            dh       : dhfuture::Machine::new(),
         }
     }
 }
@@ -189,7 +186,6 @@ impl Protector for Protector1RTT {
     ) -> QuicResult<&'a mut [u8]> {
         if key_phase == self.phase {
             let pt = self.recv.decrypt(number, ad, input)?;
-            self.dh.confirmed();
             return Ok(pt)
         };
         match self.recv_old {
@@ -198,21 +194,7 @@ impl Protector for Protector1RTT {
         }
     }
 
-    fn evolve(&mut self) {
-        match self.dh.extract() {
-            Some(material) => {
-
-                let (state, recv, send) = chain_side(self.side, &self.state, &material);
-
-                self.recv_old = Some(self.recv);
-                self.recv     = ProtectorKey::new(recv);
-                self.send     = ProtectorKey::new(send);
-                self.state    = state;
-                self.phase    = !self.phase;
-            },
-            None => {},
-        }
-    }
+    fn evolve(&mut self) {}
 
     fn key_phase(&self) -> bool { self.phase }
 
@@ -232,12 +214,10 @@ impl Protector for Protector1RTT {
     }
 
     fn get_crypto_frame(&mut self) -> Option<Vec<u8>> {
-        self.dh.trigger()
+        None
     }
 
-    fn put_crypto_frame(&mut self, msg : &[u8]) {
-        self.dh.process(msg)
-    }
+    fn put_crypto_frame(&mut self, msg : &[u8]) {}
 }
 
 // Handshake obfuscation
