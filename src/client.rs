@@ -9,7 +9,7 @@ use handshake;
 use std::net::{SocketAddr, ToSocketAddrs};
 use std::time::Duration;
 use tokio::net::UdpSocket;
-use tokio::prelude::future::Select2;
+use tokio::prelude::future::Select;
 use tokio_core::reactor;
 
 pub struct Client {
@@ -19,19 +19,25 @@ pub struct Client {
 }
 
 impl Client {
-    pub fn connect(server: &str, port: u16, server_static: [u8; 32], client_static: Option<[u8; 32]>) -> QuicResult<Select2<reactor::Timeout, ConnectFuture>>
+    pub fn connect(server: &str, port: u16, server_static: [u8; 32], client_static: Option<[u8; 32]>)
+        -> QuicResult<Future<Item = (Client, Streams), Error = QuicError>>
     {
 
-        let conn_future = ConnectFuture::new(Self::new(server, port, server_static, client_static)?)?;
+        let conn = ConnectFuture::new(
+            Self::new(server, port, server_static, client_static)?
+        )?;
 
         // combine with timeout future
 
         let core = reactor::Core::new().unwrap();
         let handle = core.handle();
-
-        Ok(reactor::Timeout::new(
+        let timeout = reactor::Timeout::new(
            Duration::from_millis(1000), &handle
-        ).unwrap().select2(conn_future))
+        ).unwrap().then(|_| {
+            Err(QuicError::Timeout)
+        });
+
+        Ok(conn.select(timeout))
     }
 
     pub(crate) fn new(server: &str, port: u16, server_static: [u8; 32], client_static: Option<[u8; 32]>) -> QuicResult<Client> {
@@ -99,13 +105,13 @@ impl Future for Client {
 
 #[must_use = "futures do nothing unless polled"]
 pub struct ConnectFuture {
-    client: Option<Client>,
+    client : Option<Client>,
 }
 
 impl ConnectFuture {
     fn new(mut client: Client) -> QuicResult<ConnectFuture> {
         Ok(ConnectFuture {
-            client: Some(client),
+            client : Some(client),
         })
     }
 }
