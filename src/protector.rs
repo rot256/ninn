@@ -27,8 +27,8 @@ pub trait Protector : Debug {
 
 #[derive(Debug)]
 pub struct Secret {
-    pub hs : [u8; 32],
-    pub ck : [u8; 32],
+    pub key1 : [u8; 32],
+    pub key2 : [u8; 32],
 }
 
 fn expand_nonce(nonce: u64, out: &mut [u8]) {
@@ -117,46 +117,10 @@ impl ProtectorKey {
 #[derive(Debug)]
 pub struct Protector1RTT {
     phase    : bool,                 // current key phase
-    state    : [u8; 32],             // chain state
     side     : Side,                 // endpoint side
     send     : ProtectorKey,         // current sending key
     recv     : ProtectorKey,         // current receiving key
     recv_old : Option<ProtectorKey>, // old receiving key
-}
-
-fn chain(state : &[u8; 32], ikm : &[u8; 32]) -> ([u8; 32], [u8; 32], [u8; 32]) {
-
-    // HKDF(salt=state, ikm=ikm, info="nquic-ratchet")
-
-    let salt = SigningKey::new(&SHA256, &state[..]);
-    let prk  = hkdf::extract(&salt, &ikm[..]);
-    let info = "nquic-ratchet".as_bytes();
-    let mut out = vec![0u8; 3 * SHA256.output_len];
-    hkdf::expand(&prk, &info, &mut out);
-
-    // split
-
-    let mut state = [0u8; 32];
-    let mut recv  = [0u8; 32];
-    let mut send  = [0u8; 32];
-
-    state.clone_from_slice(&out[..32]);
-    recv.clone_from_slice(&out[32..64]);
-    send.clone_from_slice(&out[64..]);
-
-    (state, recv, send)
-}
-
-fn chain_side(
-    side  : Side,
-    state : &[u8; 32],
-    ikm   : &[u8; 32]
-) -> ([u8; 32], [u8; 32], [u8; 32]) {
-    let (state, recv, send) = chain(state, ikm);
-    match side {
-        Side::Client => (state, recv, send),
-        Side::Server => (state, send, recv),
-    }
 }
 
 impl Protector1RTT {
@@ -164,11 +128,13 @@ impl Protector1RTT {
         secret : Secret,
         side   : Side
     ) -> Protector1RTT {
-        let (state, recv, send) = chain_side(side, &secret.hs, &secret.ck);
+        let (recv, send) = match side {
+            Side::Client => (secret.key1, secret.key2),
+            Side::Server => (secret.key2, secret.key1),
+        };
         Protector1RTT {
             side     : side,
             phase    : false,
-            state    : state,
             send     : ProtectorKey::new(send),
             recv     : ProtectorKey::new(recv),
             recv_old : None,

@@ -1,5 +1,5 @@
 use futures::sync::mpsc::{self, Receiver, Sender};
-use futures::{Async, AsyncSink, Future, Poll, Sink, Stream};
+use futures::{task, Async, AsyncSink, Future, Poll, Sink, Stream};
 
 use super::{QuicError, QuicResult, ClientAuthenticator};
 use conn_state::ConnectionState;
@@ -235,6 +235,8 @@ impl <A> Future for Connection<A> where A : ClientAuthenticator {
     fn poll(&mut self) -> Poll<(), ()> {
         loop {
 
+            debug!("poll: connection");
+
             // handle incoming UDP datagrams
 
             let mut received = false;
@@ -283,9 +285,14 @@ impl <A> Future for Connection<A> where A : ClientAuthenticator {
                     }
                     Err(e) => error!("error sending: {:?}", e),
                 },
-                Ok(None) => {}
-                Err(e) => error!("error from connection state: {:?}", e),
+                Ok(None) => {
+                    // giant hack. TODO: fix
+                    // causes huge CPU util. will fix upstream (Quinn)
+                    task::current().notify();
+                }
+                Err(e)   => error!("error from connection state: {:?}", e),
             }
+
             if sent {
                 self.state.pop_queue();
             }
@@ -303,6 +310,9 @@ impl <A> Future for Connection<A> where A : ClientAuthenticator {
                 break;
             }
         }
+
+        debug!("poll: not ready");
+
         Ok(Async::NotReady)
     }
 }

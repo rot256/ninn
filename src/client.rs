@@ -96,8 +96,10 @@ pub struct ConnectFuture {
 
 impl ConnectFuture {
     fn new(mut client: Client) -> QuicResult<ConnectFuture> {
-        let core   = reactor::Core::new().unwrap();
-        let handle = core.handle();
+        let core     = reactor::Core::new().unwrap();
+        let handle   = core.handle();
+        let prologue = "Hello World".as_bytes();
+        client.conn_state.initial(&prologue)?;
         Ok(ConnectFuture {
             client: Some(client),
             timeout: reactor::Timeout::new(
@@ -114,11 +116,13 @@ impl Future for ConnectFuture {
 
         // poll timeout
 
+        /*
         match self.timeout.poll() {
             Err(e)              => return Err(QuicError::Io(e)),
             Ok(Async::Ready(_)) => return Err(QuicError::Timeout),
             _ => (),
         };
+        */
 
         // poll for connection progression
 

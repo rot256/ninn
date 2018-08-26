@@ -308,7 +308,6 @@ where
             buf,
         } = partial;
 
-
         let payload = match header {
             Header::Long { number, .. } | Header::Short { number, .. } => {
                 let (header_buf, payload_buf) = buf.split_at_mut(header_len);
@@ -366,6 +365,9 @@ where
 
     #[cfg_attr(feature = "cargo-clippy", allow(needless_pass_by_value))]
     fn handle_packet(&mut self, header: Header, payload: Vec<Frame>) -> QuicResult<()> {
+
+        debug!("handle packet");
+
         let (dst_cid, number) = match header {
             Header::Long {
                 dst_cid,
@@ -415,12 +417,8 @@ where
                         Some(LongType::Initial) =>
                             {
                                 if self.side == Side::Client {
-                                    return Err(QuicError::General(format!(
-                                        "client received initial message"
-                                    )));
-                                };
-
-                                if prologue {
+                                    self.handle_handshake_message(&f.payload)?;
+                                } else if prologue {
                                     self.handle_handshake_message(&f.payload)?;
                                 } else {
                                     debug!("  set prologue");

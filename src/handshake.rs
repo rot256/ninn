@@ -113,14 +113,14 @@ impl Session for ClientSession {
 
                 // export key material
 
-                let (hs, ck) = session.export().unwrap();
+                let (key1, key2) = session.export().unwrap();
 
                 debug!("  params_remote = {:?}", &self.params_remote);
                 debug!("  exporting key material from Noise:");
-                debug!("    hs : {}", hex::encode(hs));
-                debug!("    ck : {}", hex::encode(ck));
+                debug!("    key1 : {}", hex::encode(key1));
+                debug!("    key2 : {}", hex::encode(key2));
 
-                Ok((None, Some(protector::Secret{hs, ck})))
+                Ok((None, Some(protector::Secret{key1, key2})))
             },
             Err(_) => Err(QuicError::General("failed to decrypt noise".to_owned()))
         }
@@ -258,12 +258,12 @@ impl <A> Session for ServerSession<A> where A :ClientAuthenticator {
                 assert!(!session.is_initiator());
                 assert!(session.is_handshake_finished());
 
-                let (hs, ck) = session.export().unwrap();
+                let (key1, key2) = session.export().unwrap();
 
-                debug!("    hs : {}", hex::encode(hs));
-                debug!("    ck : {}", hex::encode(ck));
+                debug!("  key1 : {}", hex::encode(key1));
+                debug!("  key2 : {}", hex::encode(key2));
 
-                Ok((Some(resp), Some(protector::Secret{hs, ck})))
+                Ok((Some(resp), Some(protector::Secret{key1, key2})))
             },
             Err(_) => Err(QuicError::General("failed to decrypt noise".to_owned()))
         }
