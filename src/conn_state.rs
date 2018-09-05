@@ -120,8 +120,6 @@ where
 
         // coalesce frames into the packet
 
-        debug!("handshaking: {}", self.is_handshaking());
-
         self.queue_packet()?;
 
         // protector messages guaranteed to be sent

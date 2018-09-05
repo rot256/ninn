@@ -235,8 +235,6 @@ impl <A> Future for Connection<A> where A : ClientAuthenticator {
     fn poll(&mut self) -> Poll<(), ()> {
         loop {
 
-            debug!("poll: connection");
-
             // handle incoming UDP datagrams
 
             let mut received = false;
@@ -310,8 +308,6 @@ impl <A> Future for Connection<A> where A : ClientAuthenticator {
                 break;
             }
         }
-
-        debug!("poll: not ready");
 
         Ok(Async::NotReady)
     }

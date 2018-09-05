@@ -55,8 +55,6 @@ impl Streams {
             frame.encode(payload);
         }
 
-        debug!("construct stream frames");
-
         while let Some((id, start, mut end)) = me.send_queue.pop_front() {
 
             // check insufficient space for frame

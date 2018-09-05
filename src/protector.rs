@@ -183,7 +183,7 @@ impl Protector for Protector1RTT {
         None
     }
 
-    fn put_crypto_frame(&mut self, msg : &[u8]) {}
+    fn put_crypto_frame(&mut self, _msg : &[u8]) {}
 }
 
 // Handshake obfuscation
@@ -196,19 +196,13 @@ pub struct ProtectorHandshake {
 
 impl ProtectorHandshake {
 
-    fn expanded_handshake_secret(conn_id: ConnectionId, label: &[u8]) -> Vec<u8> {
-        let prk = ProtectorHandshake::handshake_secret(conn_id);
-        let mut out = vec![0u8; SHA256.output_len];
-        ProtectorHandshake::qhkdf_expand(&prk, label, &mut out);
-        out
-    }
-
     fn qhkdf_expand(key: &SigningKey, label: &[u8], out: &mut [u8]) {
-        let mut info = Vec::with_capacity(2 + 1 + 5 + out.len());
+        let mut info = Vec::with_capacity(2 + 1 + 5 + label.len());
         info.put_u16_be(out.len() as u16);
         info.put_u8(5 + (label.len() as u8));
         info.extend_from_slice(b"QUIC ");
         info.extend_from_slice(&label);
+        assert_eq!(info.len(), 2 + 1 + 5 + label.len());
         hkdf::expand(key, &info, out);
     }
 
@@ -226,8 +220,14 @@ impl ProtectorHandshake {
         // derieve keys based on connection id
 
         let (secret_send, secret_recv) = {
-            let sc = ProtectorHandshake::expanded_handshake_secret(cid, b"client hs");
-            let ss = ProtectorHandshake::expanded_handshake_secret(cid, b"server hs");
+            let prk = ProtectorHandshake::handshake_secret(cid);
+            let mut sc = [0u8; 32];
+            let mut ss = [0u8; 32];
+            ProtectorHandshake::qhkdf_expand(&prk, b"client hs", &mut sc);
+            ProtectorHandshake::qhkdf_expand(&prk, b"server hs", &mut ss);
+            debug!("handshake secrets:");
+            debug!("  client = {}", hex::encode(&sc));
+            debug!("  server = {}", hex::encode(&ss));
             match side {
                 Side::Client => (sc, ss),
                 Side::Server => (ss, sc),
@@ -236,17 +236,9 @@ impl ProtectorHandshake {
 
         // convert key-material to AEAD keys
 
-        {
-            let mut ss = [0u8; 32];
-            let mut sr = [0u8; 32];
-
-            ss[..].clone_from_slice(&secret_send);
-            sr[..].clone_from_slice(&secret_recv);
-
-            ProtectorHandshake {
-                key_send : ProtectorKey::new(ss),
-                key_recv : ProtectorKey::new(sr),
-            }
+        ProtectorHandshake {
+            key_send : ProtectorKey::new(secret_send),
+            key_recv : ProtectorKey::new(secret_recv),
         }
     }
 }
