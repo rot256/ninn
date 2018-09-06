@@ -222,6 +222,14 @@ impl Codec for CryptoFrame {
             return Err(QuicError::DecodeError("length is too great".to_string()));
         }
 
+        // force offset to 0
+
+        if offset != 0 {
+            return Err(QuicError::DecodeError(
+                "zero offset for crypto frames enforced".to_string()
+            ));
+        }
+
         // copy payload into frame
 
         let mut payload = vec![0u8; length as usize];

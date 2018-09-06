@@ -39,10 +39,6 @@ pub struct ConnectionState<T> {
     pmtu: usize,
 
     protector_msg: Option<Vec<u8>>,
-
-    // crypto
-
-    crypto_offset: u64
 }
 
 impl<T> ConnectionState<T>
@@ -92,7 +88,6 @@ where
             local,
             src_pn: src_pn & 0x0000_0000_ffff_ffff,
             dst_pn: 0,
-            crypto_offset: 0,
             protector: Box::new(ProtectorHandshake::new(hshake, side)),
             protector_old: None,
             streams,
@@ -209,11 +204,10 @@ where
             if let Some(ref msg) = self.protector_msg {
                 debug!("encode future secrecy frame {:?}", msg);
                 Frame::Crypto(CryptoFrame {
-                    offset  : self.crypto_offset,
+                    offset  : 0,
                     length  : msg.len() as u64,
                     payload : msg.to_vec(),
                 }).encode(&mut write);
-                self.crypto_offset += msg.len() as u64;
             }
 
             // 1. control messages
@@ -342,7 +336,6 @@ where
                     State::ConfirmHandshake => {
                         debug!("  connection confirmed");
                         self.state = State::Connected;
-                        self.crypto_offset = 0;
                     }
                     _ => (),
                 }
@@ -538,11 +531,10 @@ where
             debug!("  msg = {} ", hex::encode(&msg));
             let length = msg.len() as u64;
             self.control.push_back(Frame::Crypto(CryptoFrame {
-                offset  : self.crypto_offset,
+                offset  : 0,
                 length  : length,
                 payload : msg,
             }));
-            self.crypto_offset += length;
         }
 
         Ok(())
@@ -560,11 +552,10 @@ impl ConnectionState<handshake::ClientSession> {
         {
             let length = prologue.len() as u64;
             self.control.push_back(Frame::Crypto(CryptoFrame{
-                offset  : self.crypto_offset,
+                offset  : 0,
                 length  : length,
                 payload : prologue.to_owned(),
             }));
-            self.crypto_offset += length;
         }
 
         // push crypto frame
@@ -573,11 +564,10 @@ impl ConnectionState<handshake::ClientSession> {
             let length = prologue.len() as u64;
             debug_assert!(length < (1 << 16));
             self.control.push_back(Frame::Crypto(CryptoFrame{
-                offset  : self.crypto_offset,
+                offset  : 0,
                 length  : msg.len() as u64,
                 payload : msg,
             }));
-            self.crypto_offset += length;
         }
 
         Ok(())
