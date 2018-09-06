@@ -436,7 +436,8 @@ mod tests {
     fn test_crypto_round_trip() {
         let payload = b"\x0d\x9c\xf7\x55\x86\x00\x00\x00";
         let obj = super::Frame::Crypto(super::CryptoFrame {
-            len     : payload.len() as u16,
+            offset  : 0,
+            length  : payload.len() as u64,
             payload : payload.to_vec(),
         });
         let bytes = b"\x0b\x00\x08\x0d\x9c\xf7\x55\x86\x00\x00\x00";

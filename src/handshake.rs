@@ -113,14 +113,17 @@ impl Session for ClientSession {
 
                 // export key material
 
-                let (key1, key2) = session.export().unwrap();
+                let (client_secret, server_secret) = session.export().unwrap();
 
                 debug!("  params_remote = {:?}", &self.params_remote);
                 debug!("  exporting key material from Noise:");
-                debug!("    key1 : {}", hex::encode(key1));
-                debug!("    key2 : {}", hex::encode(key2));
+                debug!("    client : {}", hex::encode(client_secret));
+                debug!("    server : {}", hex::encode(server_secret));
 
-                Ok((None, Some(protector::Secret{key1, key2})))
+                Ok((None, Some(protector::Secret{
+                    client: client_secret,
+                    server: server_secret
+                })))
             },
             Err(_) => Err(QuicError::General("failed to decrypt noise".to_owned()))
         }
@@ -258,12 +261,15 @@ impl <A> Session for ServerSession<A> where A :ClientAuthenticator {
                 assert!(!session.is_initiator());
                 assert!(session.is_handshake_finished());
 
-                let (key1, key2) = session.export().unwrap();
+                let (client_secret, server_secret) = session.export().unwrap();
 
-                debug!("  key1 : {}", hex::encode(key1));
-                debug!("  key2 : {}", hex::encode(key2));
+                debug!("  client : {}", hex::encode(client_secret));
+                debug!("  server : {}", hex::encode(server_secret));
 
-                Ok((Some(resp), Some(protector::Secret{key1, key2})))
+                Ok((Some(resp), Some(protector::Secret{
+                    client: client_secret,
+                    server: server_secret
+                })))
             },
             Err(_) => Err(QuicError::General("failed to decrypt noise".to_owned()))
         }
