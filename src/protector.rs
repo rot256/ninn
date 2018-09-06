@@ -18,7 +18,7 @@ fn qhkdf_expand(key: &SigningKey, label: &[u8], out: &mut [u8]) {
     let mut info = Vec::with_capacity(2 + 1 + 5 + label.len());
     info.put_u16_be(out.len() as u16);
     info.put_u8(5 + (label.len() as u8));
-    info.extend_from_slice(b"QUIC ");
+    info.extend_from_slice(b"quic ");
     info.extend_from_slice(&label);
     assert_eq!(info.len(), 2 + 1 + 5 + label.len());
     hkdf::expand(key, &info, out);
