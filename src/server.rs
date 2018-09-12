@@ -283,11 +283,7 @@ impl <A> Future for Connection<A> where A : ClientAuthenticator {
                     }
                     Err(e) => error!("error sending: {:?}", e),
                 },
-                Ok(None) => {
-                    // giant hack. TODO: fix
-                    // causes huge CPU util. will fix upstream (Quinn)
-                    task::current().notify();
-                }
+                Ok(None) => {}
                 Err(e)   => error!("error from connection state: {:?}", e),
             }
 
